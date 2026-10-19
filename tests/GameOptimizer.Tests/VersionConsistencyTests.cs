@@ -42,11 +42,12 @@ public class VersionConsistencyTests
     }
 
     [Fact]
-    public void 当前版本应为0_5_0()
+    public void 当前版本应为0_5_1()
     {
         // 版本号由用户手动设定；升级时改这里和 Directory.Build.props
         AssemblyVersion.Major.Should().Be(0);
         AssemblyVersion.Minor.Should().Be(5);
+        AssemblyVersion.Build.Should().Be(1);
     }
 
     [Fact]
