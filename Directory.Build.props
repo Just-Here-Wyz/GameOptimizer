@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    版本号集中定义。所有项目通过 Directory.Build.props 继承，不要在各 csproj 里重复写。
+
+    版本规则（用户约定）：
+      外观/功能更新 → 次版本号 +1（如 v0.5.0 → v1.0.0）
+      仅修 bug     → 修订号 +1（如 v0.5.0 → v0.5.1）
+    实际版本号由用户手动设定，这里只放当前值。
+  -->
+  <PropertyGroup>
+    <Version>0.5.0</Version>
+    <AssemblyVersion>0.5.0.0</AssemblyVersion>
+    <FileVersion>0.5.0.0</FileVersion>
+    <Product>游戏优化助手</Product>
+    <Company>GameOptimizer</Company>
+    <Copyright>Copyright © 2026</Copyright>
+  </PropertyGroup>
+
+</Project>

@@ -4,6 +4,7 @@ obj/
 *.user
 *.suo
 .vs/
+*.pdb
 
 # 测试与覆盖率
 TestResults/
@@ -12,7 +13,13 @@ coverage*.xml
 
 # 发布产物
 publish/
-*.pdb
+installer/
+
+# 运行时产物（采集到的 CSV 等）
+captures/
+*.etl
 
 # 本地产物
 *.log
+Thumbs.db
+desktop.ini
