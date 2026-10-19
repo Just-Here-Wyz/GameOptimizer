@@ -33,4 +33,7 @@ public sealed record VramAssessment(
     IReadOnlyList<string> Reasons)
 {
     public bool IsProblem => Verdict is VramVerdict.Tight or VramVerdict.Insufficient;
+
+    /// <summary>真正有实测数据时才为 true。首页据此决定要不要用实测结论覆盖单款游戏的判定。</summary>
+    public bool HasMeasurement => Verdict != VramVerdict.Unknown;
 }

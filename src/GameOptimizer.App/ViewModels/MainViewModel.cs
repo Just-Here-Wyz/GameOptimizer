@@ -64,12 +64,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string HostSummary => $"{Environment.MachineName} · {Environment.ProcessorCount} 线程";
 
     /// <summary>
-    /// 核显的显存预算：Windows 默认允许共享约一半物理内存。
-    /// 独显场景这里会偏保守，后续可改为读实际可用量。
+    /// 显存预算：从 DXGI 读显卡真实容量——独显取专用显存，核显取专用 + 共享。
+    /// 旧实现固定用「物理内存的一半」，独显机器会把 8GB 显卡算成 16GB 预算，
+    /// 于是所有游戏都显示「显存充足」。这是本次修复的核心。
     /// </summary>
-    public double VramBudgetMb { get; } = SystemMemoryInfo.TotalPhysicalMb > 0
-        ? SystemMemoryInfo.TotalPhysicalMb / 2
-        : 8192;
+    public VramBudget Budget { get; } = VramBudget.Detect();
+
+    public double VramBudgetMb => Budget.BudgetMb;
+
+    /// <summary>预算来源说明，界面必须如实标注是实测还是估算。</summary>
+    public string VramBudgetText => Budget.Describe();
 
     public ObservableCollection<GameStatusItem> Games { get; } = [];
     public SessionChartData Charts { get; } = new();
@@ -298,15 +302,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void RefreshAllGameStatus()
     {
         Games.Clear();
-        var assessor = new VramAssessor();
+        var assessor = new GameVramAssessor();
+
+        // 实测只算一次：同一会话的采样对所有游戏是同一个观测结果
+        var measured = _frames.Count > 0
+            ? new VramAssessor().Assess(_frames, VramBudgetMb)
+            : null;
+
         foreach (var g in _games)
         {
-            // 没有实测数据时，用"当前可用显存"给出保守估计
-            var status = _frames.Count > 0
-                ? assessor.Assess(_frames, VramBudgetMb)
-                : new VramAssessment(VramVerdict.Unknown, 0, 0, RamFreeMb, []);
+            // 每款游戏按「这款游戏自己要多少显存」单独判定，
+            // 而不是拿同一个全局占用率套到所有游戏头上。
+            Games.Add(new GameStatusItem(g, assessor.Assess(g.Name, g.SizeOnDiskGb, Budget), measured));
+        }
 
-            Games.Add(new GameStatusItem(g, status));
+        OnPropertyChanged(nameof(GameVramSummary));
+    }
+
+    /// <summary>首页顶部的一句话总结：几款充足、几款紧张。</summary>
+    public string GameVramSummary
+    {
+        get
+        {
+            if (Games.Count == 0) return "";
+
+            var tight = Games.Count(g => g.Verdict == GameVramVerdict.Tight);
+            var unknown = Games.Count(g => g.Verdict == GameVramVerdict.Unknown);
+            var fine = Games.Count - tight - unknown;
+
+            var text = $"{fine} 款显存充足";
+            if (tight > 0) text += $"，{tight} 款显存紧张";
+            if (unknown > 0) text += $"，{unknown} 款无法判定";
+            return text;
         }
     }
 
@@ -392,26 +419,63 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 }
 
-/// <summary>游戏库列表项，含显存达标状态。</summary>
-public sealed class GameStatusItem(GameEntry entry, VramAssessment assessment)
+/// <summary>
+/// 游戏库列表项。判定按「这款游戏 × 当前画质 vs 本机显存」独立计算，
+/// 有实测数据时再叠加实测结论。
+/// </summary>
+public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessment, VramAssessment? measured)
 {
     public string Name => entry.Name;
     public string SizeText => $"{entry.SizeOnDiskGb:F1} GB";
     public string Path => entry.InstallPath;
+
+    /// <summary>这款游戏正常配置下需要的显存，与占比。</summary>
+    public string DemandText => assessment.Verdict == GameVramVerdict.Unknown
+        ? $"{assessment.Requirement.SettingsText} 约需 {assessment.Requirement.RequiredMb:F0} MB"
+        : $"{assessment.Requirement.SettingsText} 约需 {assessment.Requirement.RequiredMb:F0} MB" +
+          $" / 本机 {assessment.BudgetMb:F0} MB（占用 {assessment.Ratio:P0}）";
+
+    /// <summary>
+    /// 悬停在结论上时展开的完整依据：需求、预算、占比、估算来源。
+    /// 列表保持「名称 + 路径 + 体积 + 结论」的清爽排版，详细数字按需查看。
+    /// </summary>
+    public string VerdictToolTip
+    {
+        get
+        {
+            var lines = new List<string> { DemandText };
+            if (assessment.Verdict == GameVramVerdict.Unknown)
+                lines.Add(assessment.Reason);
+            if (MeasuredText.Length > 0) lines.Add(MeasuredText);
+            return string.Join("\n", lines);
+        }
+    }
+
+    public GameVramVerdict Verdict => assessment.Verdict;
+
     public string VerdictText => assessment.Verdict switch
     {
-        VramVerdict.Fine => "显存充足",
-        VramVerdict.Tight => "显存偏紧",
-        VramVerdict.Insufficient => "显存不足",
-        _ => "待测",
+        GameVramVerdict.Fine => "显存充足",
+        GameVramVerdict.Tight => "显存紧张",
+        _ => "无法判定",
     };
+
     public string VerdictColor => assessment.Verdict switch
     {
-        VramVerdict.Fine => "#34C759",
-        VramVerdict.Tight => "#FF9F0A",
-        VramVerdict.Insufficient => "#FF453A",
+        GameVramVerdict.Fine => "#34C759",
+        GameVramVerdict.Tight => "#FF9F0A",
         _ => "#9AA0A6",
     };
+
+    /// <summary>会话实测结论（只在采到数据后出现）。</summary>
+    public string MeasuredText => measured is { HasMeasurement: true }
+        ? measured.Verdict switch
+        {
+            VramVerdict.Fine => "实测：本次会话显存充足",
+            VramVerdict.Tight => "实测：本次会话显存偏紧",
+            _ => "实测：本次会话显存不足",
+        }
+        : "";
 }
 
 /// <summary>最小命令实现，避免为一个按钮引入 MVVM 框架。</summary>

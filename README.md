@@ -19,6 +19,7 @@
 |---|---|
 | 实时监控显存 / 内存 / GPU / 逐核 CPU | ✅ 无需任何特权 |
 | 自动扫描 Steam 与 WeGame 游戏库 | ✅ 剔除壁纸等非游戏 |
+| 按游戏判断显存是否充足 | ✅ 按每款游戏的正常需求对比本机实测显存 |
 | 帧时间采集与卡顿归因 | ⚠️ 需要 ETW 权限，见下 |
 | 游戏模式（电源 / 显卡 / 后台进程） | ✅ 全部可回滚 |
 
@@ -68,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File tools\verify-frametime.ps1
 ```
 src/GameOptimizer.Core     采集、判定、归因（无 UI 依赖，可单测）
 src/GameOptimizer.App      WPF 界面
-tests/GameOptimizer.Tests  184 个 xUnit 用例
+tests/GameOptimizer.Tests  215 个 xUnit 用例
 tools/                     运维脚本（ETW 授权、链路验证）
 docs/                      项目文档
 ```
