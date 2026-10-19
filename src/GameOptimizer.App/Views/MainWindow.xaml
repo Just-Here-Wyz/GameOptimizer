@@ -172,7 +172,10 @@
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-                        <Button Content="{Binding MonitorButtonText}" Command="{Binding ToggleMonitorCommand}" Padding="12,6"/>
+                        <Button Content="{Binding FrameCaptureButtonText}" Command="{Binding ToggleFrameCaptureCommand}"
+                                Padding="12,6"/>
+                        <Button Content="{Binding MonitorButtonText}" Command="{Binding ToggleMonitorCommand}"
+                                Padding="12,6" Margin="10,0,0,0" Background="#FF3A3F4A"/>
                         <TextBlock Text="{Binding ChartSampleText}" Style="{StaticResource Muted}"
                                    VerticalAlignment="Center" Margin="16,0,0,0"/>
                     </StackPanel>

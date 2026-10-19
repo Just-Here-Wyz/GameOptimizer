@@ -47,6 +47,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ScanGamesCommand = new RelayCommand(_ => { ScanGames(); RefreshAllGameStatus(); });
         ToggleGameModeCommand = new RelayCommand(_ => ToggleGameMode());
         ToggleMonitorCommand = new RelayCommand(_ => ToggleMonitor());
+        ToggleFrameCaptureCommand = new RelayCommand(_ => ToggleFrameCapture());
 
         ScanGames();
         RefreshAllGameStatus();
@@ -77,6 +78,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ScanGamesCommand { get; }
     public RelayCommand ToggleGameModeCommand { get; }
     public RelayCommand ToggleMonitorCommand { get; }
+    public RelayCommand ToggleFrameCaptureCommand { get; }
 
     private double _vramUsedMb;
     public double VramUsedMb { get => _vramUsedMb; private set { _vramUsedMb = value; OnPropertyChanged(); OnPropertyChanged(nameof(VramText)); } }
@@ -178,7 +180,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private readonly List<double> _recentFrameTimes = [];
 
-    private string _frameTimeStatus = "帧时间采集未启动。检测到游戏进程后会自动接入 PresentMon。";
+    private string _frameTimeStatus = "帧时间采集未启动。启动游戏后点「开始采集帧数据」即可接入 PresentMon。";
     public string FrameTimeStatus
     {
         get => _frameTimeStatus;
@@ -220,6 +222,48 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : _frameTimes.LastError ?? "启动帧时间采集失败。";
         return ok;
     }
+
+    /// <summary>手动开始采集：优先抓正在运行的游戏，没有则提示用户。</summary>
+    public bool StartFrameCaptureForRunningGame()
+    {
+        var running = GameProcessDetector.Detect(_games.Select(g => (g.Name, g.ExecutablePath)));
+        if (running.Count == 0)
+        {
+            FrameTimeStatus = "没有检测到正在运行的游戏。请先启动游戏，再点「开始采集帧数据」。";
+            OnPropertyChanged(nameof(FrameTimeBannerVisibility));
+            return false;
+        }
+
+        var game = running[0];
+        var ok = TryStartFrameCapture(game.ProcessName);
+        if (ok)
+            FrameTimeStatus = $"正在采集「{game.DisplayName}」（进程 {game.ProcessName}.exe）的帧数据。";
+        return ok;
+    }
+
+    /// <summary>停止帧采集。</summary>
+    public void StopFrameCapture()
+    {
+        _frameTimes.Dispose();
+        FrameTimeStatus = _recentFrameTimes.Count > 0
+            ? $"已停止采集，本次共记录 {_recentFrameTimes.Count} 帧。"
+            : "已停止采集，本次没有拿到帧数据。";
+        OnPropertyChanged(nameof(FrameTimeBannerVisibility));
+    }
+
+    private bool _isFrameCapturing;
+    public bool IsFrameCapturing
+    {
+        get => _isFrameCapturing;
+        private set
+        {
+            _isFrameCapturing = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(FrameCaptureButtonText));
+        }
+    }
+
+    public string FrameCaptureButtonText => IsFrameCapturing ? "停止采集帧数据" : "开始采集帧数据";
 
     private int _chartSampleCount;
     public int ChartSampleCount
@@ -296,6 +340,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         IsMonitoring = !IsMonitoring;
         if (IsMonitoring) _clock.Start(); else _clock.Stop();
+    }
+
+    private void ToggleFrameCapture()
+    {
+        if (IsFrameCapturing)
+        {
+            StopFrameCapture();
+            IsFrameCapturing = false;
+            return;
+        }
+
+        IsFrameCapturing = StartFrameCaptureForRunningGame();
     }
 
     /// <summary>停止采集并出报告。关窗口时调用，保证游戏模式一定被还原。</summary>

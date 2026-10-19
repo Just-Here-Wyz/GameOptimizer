@@ -122,9 +122,18 @@ public sealed class PdhSampler : IDisposable
             SharedUsedMb: SafeRead(_sharedUsage) / BytesPerMb,
             CommittedMb: SafeRead(_primaryCommitted) / BytesPerMb,
             AvailableRamMb: SafeRead(_availableRam),
-            Gpu3DPercent: gpuMax,
-            MaxCorePercent: coreMax,
+            // PDH 在两次读取间隔异常时会算出超过 100 的百分比（实测见过 123%），
+            // 利用率语义上不可能越界，必须钳制，否则界面上会出现荒谬数字
+            Gpu3DPercent: ClampPercent(gpuMax),
+            MaxCorePercent: ClampPercent(coreMax),
             FrameTimeMs: frameTimeMs);
+    }
+
+    /// <summary>把百分比钳制到 [0,100]，并丢弃非有限值。</summary>
+    internal static double ClampPercent(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value)) return 0;
+        return Math.Clamp(value, 0, 100);
     }
 
     private const double BytesPerMb = 1024.0 * 1024.0;
