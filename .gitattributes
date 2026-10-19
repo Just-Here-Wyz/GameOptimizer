@@ -1,0 +1,13 @@
+# 统一换行符：仓库内一律 LF，检出时 Windows 用 CRLF
+* text=auto
+
+# PowerShell 脚本的编码由测试保障（见 Ps1EncodingTests）。
+# 不用 working-tree-encoding=UTF-8-BOM：那需要 Git 自带 iconv，
+# 部分发行版不支持，会在 add 时报 "failed to encode"。
+
+# 二进制
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary
+*.dll binary

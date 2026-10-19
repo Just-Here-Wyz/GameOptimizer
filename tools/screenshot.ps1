@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ProcessName = 'GameOptimizer.App',
     [string]$OutFile = "$env:TEMP\go-shot.png"
 )
