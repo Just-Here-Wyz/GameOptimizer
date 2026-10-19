@@ -133,6 +133,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             var ts = _clock.ElapsedMilliseconds;
 
+            // 采集进程可能因权限等原因静默退出，必须主动检查，
+            // 否则界面会一直显示"正在采集"而实际上什么都没采到
+            if (IsFrameCapturing && _frameTimes.HasFailed(out var captureError))
+            {
+                IsFrameCapturing = false;
+                FrameTimeStatus = $"帧采集已中断：{captureError}";
+                OnPropertyChanged(nameof(FrameTimeBannerVisibility));
+            }
+
             // 从 PresentMon CSV 拉取这一秒内新增的帧，取平均作为本采样点的帧时间
             var newFrameTimes = _frameTimes.PollNewFrameTimes();
             if (newFrameTimes.Count > 0)
@@ -226,6 +235,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>手动开始采集：优先抓正在运行的游戏，没有则提示用户。</summary>
     public bool StartFrameCaptureForRunningGame()
     {
+        // 检测同时返回"显示名"和"实际运行的进程名"，二者可能不同：
+        // 三角洲行动扫描到 DeltaForceClient.exe，运行时却是 DeltaForceClient-Win64-Shipping.exe
         var running = GameProcessDetector.Detect(_games.Select(g => (g.Name, g.ExecutablePath)));
         if (running.Count == 0)
         {
@@ -235,6 +246,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
 
         var game = running[0];
+        // PresentMon 的 --process_name 需要实际进程名
         var ok = TryStartFrameCapture(game.ProcessName);
         if (ok)
             FrameTimeStatus = $"正在采集「{game.DisplayName}」（进程 {game.ProcessName}.exe）的帧数据。";

@@ -107,10 +107,13 @@ public sealed class WeGameLibraryScanner : IGameLibraryScanner
     }
 
     /// <summary>
-    /// 挑主程序。WeGame 游戏的可执行文件位置不固定，规则：
-    /// 1. 排除卸载器、崩溃上报、启动器外壳、依赖安装程序；
-    /// 2. 优先文件名与游戏名相近的（如 DeltaForceClient 之于 DeltaForce）；
-    /// 3. 同等条件下取体积最大的。
+    /// 挑主程序。WeGame 游戏的可执行文件位置不固定，规则（按优先级）：
+    /// 1. UE 游戏的真实主程序带 -Win64-Shipping 后缀（实测 490MB），
+    ///    根目录那个同名的 DeltaForceClient.exe 只是外壳，必须优先选前者；
+    /// 2. 路径中包含 Binaries\Win64 的优先（UE 的惯例位置）；
+    /// 3. 排除卸载器、崩溃上报、启动器外壳、依赖安装程序、反作弊；
+    /// 4. 文件名与游戏名相近的优先；
+    /// 5. 同等条件下取体积最大的。
     /// </summary>
     internal static string? FindMainExecutable(string gameDir, string gameName)
     {
@@ -128,6 +131,9 @@ public sealed class WeGameLibraryScanner : IGameLibraryScanner
             {
                 var info = new FileInfo(f);
                 if (IsHelperExecutable(info.Name)) continue;
+                // 反作弊目录下的 exe 一律排除：AntiCheatExpert\SGuard\x64\SGuard64.exe
+                // 文件名本身不含 anti，只能按路径判定
+                if (IsHelperPath(info.FullName)) continue;
                 candidates.Add(info);
             }
             catch { }
@@ -137,9 +143,31 @@ public sealed class WeGameLibraryScanner : IGameLibraryScanner
 
         var tokens = NameTokens(gameName);
         return candidates
-            .OrderByDescending(f => tokens.Any(t => f.Name.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(f => IsShippingExecutable(f.Name))
+            .ThenByDescending(f => f.FullName.Contains(@"\Binaries\Win64\", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(f => tokens.Any(t => f.Name.Contains(t, StringComparison.OrdinalIgnoreCase)))
             .ThenByDescending(f => f.Length)
             .First().FullName;
+    }
+
+    /// <summary>UE 打包的游戏真实主程序以 -Win64-Shipping.exe 结尾。</summary>
+    internal static bool IsShippingExecutable(string fileName)
+        => fileName.Contains("-Shipping.exe", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>按目录排除反作弊、依赖、启动器外壳等非游戏主程序。</summary>
+    internal static bool IsHelperPath(string fullPath)
+    {
+        string[] segments =
+        [
+            @"\AntiCheatExpert\", @"\ACE\", @"\SGuard\", @"\TenProtect\",
+            @"\WeGameLauncher\", @"\Redist\", @"\TCLS\", @"\rail_files\",
+            @"\tinydl\", @"\TinyDL\", @"\crash",
+        ];
+
+        foreach (var s in segments)
+            if (fullPath.Contains(s, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
     }
 
     /// <summary>把中文/英文游戏名拆成可用于匹配英文 exe 名的片段。</summary>

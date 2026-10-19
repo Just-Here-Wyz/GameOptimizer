@@ -82,12 +82,81 @@ public sealed class FrameTimeSource : IDisposable
             psi.ArgumentList.Add("--no_console_stats");
 
             _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            // 异步收集 stderr：不读会把管道写满导致子进程卡住，
+            // 而且拿不到 "access denied" 这种关键错误，界面就会显示虚假的"正在采集"
+            _process.ErrorDataReceived += (_, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(e.Data)) return;
+                lock (_stderrLock) { _stderr.AppendLine(e.Data); }
+            };
             _process.Start();
+            _process.BeginErrorReadLine();
+
+            // 给它一点时间暴露启动期错误（ETW 权限失败会在毫秒级返回）
+            if (_process.WaitForExit(StartupGraceMs))
+            {
+                var err = ReadStderr();
+                LastError = DescribeFailure(err, _process.ExitCode);
+                _process.Dispose();
+                _process = null;
+                return false;
+            }
+
             return true;
         }
         catch (Exception ex)
         {
             LastError = $"启动 PresentMon 失败：{ex.Message}";
+            return false;
+        }
+    }
+
+    private const int StartupGraceMs = 1500;
+    private readonly object _stderrLock = new();
+    private readonly System.Text.StringBuilder _stderr = new();
+
+    private string ReadStderr()
+    {
+        lock (_stderrLock) { return _stderr.ToString(); }
+    }
+
+    /// <summary>把 PresentMon 的 stderr 翻译成用户能看懂的原因。</summary>
+    internal static string DescribeFailure(string stderr, int exitCode)
+    {
+        if (stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
+            return "无法启动 ETW 追踪会话（access denied）：需要管理员身份运行本程序，" +
+                   "或把当前账号加入 Performance Log Users 组后重新登录。";
+
+        if (stderr.Contains("no trace session", StringComparison.OrdinalIgnoreCase))
+            return $"PresentMon 无法创建追踪会话：{stderr.Trim()}";
+
+        if (stderr.Contains("failed", StringComparison.OrdinalIgnoreCase))
+            return $"PresentMon 启动失败（退出码 {exitCode}）：{stderr.Trim()}";
+
+        return $"PresentMon 意外退出（退出码 {exitCode}）：{stderr.Trim()}";
+    }
+
+    /// <summary>采集过程中是否已异常退出。</summary>
+    public bool HasFailed(out string? error)
+    {
+        error = null;
+        if (_process is null) return false;
+
+        try
+        {
+            if (!_process.HasExited) return false;
+
+            var stderr = ReadStderr();
+            // 用 --timed 正常结束时应退出码 0 且无 access denied
+            if (_process.ExitCode != 0 || stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
+            {
+                error = DescribeFailure(stderr, _process.ExitCode);
+                return true;
+            }
+            return false;
+        }
+        catch
+        {
             return false;
         }
     }
