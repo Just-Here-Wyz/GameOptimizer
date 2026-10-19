@@ -1,0 +1,157 @@
+<Window x:Class="GameOptimizer.App.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:GameOptimizer.App.ViewModels"
+        xmlns:views="clr-namespace:GameOptimizer.App.Views"
+        Title="游戏优化助手" Height="720" Width="1080"
+        Background="{StaticResource Bg}"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Microsoft YaHei UI">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部：设备概览 + 游戏模式开关 -->
+        <Border Grid.Row="0" Style="{StaticResource Card}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="设备当前状态" Style="{StaticResource H1}"/>
+                    <TextBlock Text="{Binding HostSummary}" Style="{StaticResource Muted}" Margin="0,2,0,12"/>
+
+                    <StackPanel Orientation="Horizontal">
+                        <StackPanel Width="200">
+                            <TextBlock Text="显存占用" Style="{StaticResource Muted}"/>
+                            <TextBlock Text="{Binding VramText}" FontSize="16"/>
+                        </StackPanel>
+                        <StackPanel Width="200">
+                            <TextBlock Text="可用内存" Style="{StaticResource Muted}"/>
+                            <TextBlock Text="{Binding RamText}" FontSize="16"/>
+                        </StackPanel>
+                        <StackPanel Width="160">
+                            <TextBlock Text="GPU 3D" Style="{StaticResource Muted}"/>
+                            <TextBlock Text="{Binding GpuText}" FontSize="16"/>
+                        </StackPanel>
+                        <StackPanel Width="200">
+                            <TextBlock Text="CPU" Style="{StaticResource Muted}"/>
+                            <TextBlock Text="{Binding CpuText}" FontSize="16"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="{Binding SamplerStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
+                    <Button Content="{Binding GameModeButtonText}" Command="{Binding ToggleGameModeCommand}"
+                            Background="{StaticResource Accent}" Margin="0,0,0,8"/>
+                    <TextBlock Text="{Binding GameModeStatus}" Style="{StaticResource Muted}"
+                               TextWrapping="Wrap" MaxWidth="240" TextAlignment="Right"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 主体：两页 -->
+        <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0">
+            <TabItem Header="概览与游戏库" Foreground="{StaticResource TextPrimary}">
+                <Grid Margin="0,12,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="{Binding GameLibrarySummary}" VerticalAlignment="Center"/>
+                        <Button Content="重新扫描" Command="{Binding ScanGamesCommand}"
+                                Margin="16,0,0,0" Padding="12,6"/>
+                        <TextBlock Text="{Binding VerdictText}" Style="{StaticResource Muted}"
+                                   VerticalAlignment="Center" Margin="16,0,0,0"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Games}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource Card}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="100"/>
+                                                <ColumnDefinition Width="100"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding Path}" Style="{StaticResource Muted}"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding SizeText}"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding VerdictText}"
+                                                       Foreground="{Binding VerdictColor}"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="性能曲线" Foreground="{StaticResource TextPrimary}">
+                <Grid Margin="0,12,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button Content="{Binding MonitorButtonText}" Command="{Binding ToggleMonitorCommand}" Padding="12,6"/>
+                        <TextBlock Text="{Binding ChartSampleText}" Style="{StaticResource Muted}"
+                                   VerticalAlignment="Center" Margin="16,0,0,0"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="显存占用 (MB)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <views:Sparkline Values="{Binding Charts.VramMb}" Height="90" MinHeight="90"
+                                                     LineBrush="#FF4C8DFF"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="可用内存 (MB)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <views:Sparkline Values="{Binding Charts.RamMb}" Height="90" MinHeight="90"
+                                                     LineBrush="#FF34C759"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="GPU 3D 利用率 (%)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <views:Sparkline Values="{Binding Charts.GpuPercent}" Height="90" MinHeight="90"
+                                                     LineBrush="#FFFF9F0A"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="最高单核占用 (%)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <views:Sparkline Values="{Binding Charts.CpuCorePercent}" Height="90" MinHeight="90"
+                                                     LineBrush="#FFBF5AF2"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>
+
+

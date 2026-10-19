@@ -1,0 +1,18 @@
+# 构建输出
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# 测试与覆盖率
+TestResults/
+coverage*.xml
+*.coverage
+
+# 发布产物
+publish/
+*.pdb
+
+# 本地产物
+*.log

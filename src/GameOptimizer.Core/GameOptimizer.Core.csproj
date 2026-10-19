@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 全部 API 都是 Windows 专属（PDH / 注册表 / powercfg），标注 TFM 让平台分析器放行 -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>GameOptimizer.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 内部解析方法（VDF/ACF/实例名判定）暴露给测试，保持 API 面收敛 -->
+    <InternalsVisibleTo Include="GameOptimizer.Tests" />
+  </ItemGroup>
+
+</Project>
