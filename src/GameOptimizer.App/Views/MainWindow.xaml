@@ -10,25 +10,6 @@
         FontFamily="Microsoft YaHei UI">
 
     <Window.Resources>
-        <!-- 下拉框在深色界面上必须显式给前景色：全局 TextBlock 样式是浅色字，
-             默认白色 ComboBox 会把选项文字刷成白底白字，看起来像空白 -->
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#FF2C3038"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-            <Setter Property="BorderBrush" Value="#FF3A3F4A"/>
-            <Setter Property="Padding" Value="8,5"/>
-            <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
-            <Setter Property="FontSize" Value="13"/>
-        </Style>
-
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="#FF2C3038"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-            <Setter Property="Padding" Value="10,6"/>
-            <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
-            <Setter Property="FontSize" Value="13"/>
-        </Style>
-
         <!-- 左侧导航项：选中时左侧亮条 + 背景高亮 -->
         <Style x:Key="NavItem" TargetType="ListBoxItem">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
