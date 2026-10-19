@@ -24,6 +24,7 @@ public sealed class SessionChartData
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly PdhSampler _sampler;
+    private readonly FrameTimeSource _frameTimes = new();
     private readonly GameModeController _gameMode;
     private readonly DispatcherTimer _timer;
     private readonly Stopwatch _clock = new();
@@ -36,6 +37,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _gameMode = gameMode;
         SamplerReady = samplerReady;
         SamplerStatus = samplerReady ? "采集就绪" : $"采集不可用：{sampler.LastError}";
+
+        // 内存分母用标称容量：实测 16GB 条上报 15.73GB，用户心智里是 16
+        TotalMemoryGb = SystemMemoryInfo.NominalGb;
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
         _timer.Tick += (_, _) => Tick();
@@ -58,8 +62,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string SamplerStatus { get; }
     public string HostSummary => $"{Environment.MachineName} · {Environment.ProcessorCount} 线程";
 
-    /// <summary>核显的显存预算按物理内存的一半估，独显场景这里会偏保守。</summary>
-    public double VramBudgetMb { get; private set; } = 8192;
+    /// <summary>
+    /// 核显的显存预算：Windows 默认允许共享约一半物理内存。
+    /// 独显场景这里会偏保守，后续可改为读实际可用量。
+    /// </summary>
+    public double VramBudgetMb { get; } = SystemMemoryInfo.TotalPhysicalMb > 0
+        ? SystemMemoryInfo.TotalPhysicalMb / 2
+        : 8192;
 
     public ObservableCollection<GameStatusItem> Games { get; } = [];
     public SessionChartData Charts { get; } = new();
@@ -76,7 +85,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private double _ramFreeMb;
     public double RamFreeMb { get => _ramFreeMb; private set { _ramFreeMb = value; OnPropertyChanged(); OnPropertyChanged(nameof(RamText)); } }
-    public string RamText => $"{RamFreeMb:F0} MB 可用";
+
+    /// <summary>内存总量（标称 GB）。</summary>
+    public int TotalMemoryGb { get; }
+
+    /// <summary>已用内存（GB）= 总量 - 可用量。</summary>
+    public double RamUsedGb => TotalMemoryGb > 0
+        ? Math.Max(0, TotalMemoryGb - RamFreeMb / 1024.0)
+        : 0;
+
+    /// <summary>内存占用/总量，例如 "9.4 / 16 GB"。</summary>
+    public string RamText => $"{RamUsedGb:F1} / {TotalMemoryGb} GB";
 
     private double _gpuPercent;
     public double GpuPercent { get => _gpuPercent; private set { _gpuPercent = value; OnPropertyChanged(); OnPropertyChanged(nameof(GpuText)); } }
@@ -111,24 +130,40 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             var ts = _clock.ElapsedMilliseconds;
-            var frame = _sampler.Sample(ts, 0);
+
+            // 从 PresentMon CSV 拉取这一秒内新增的帧，取平均作为本采样点的帧时间
+            var newFrameTimes = _frameTimes.PollNewFrameTimes();
+            if (newFrameTimes.Count > 0)
+            {
+                _recentFrameTimes.AddRange(newFrameTimes);
+                if (_recentFrameTimes.Count > 240)
+                    _recentFrameTimes.RemoveRange(0, _recentFrameTimes.Count - 240);
+                UpdateFrameTimeStatus();
+            }
+
+            var frameTimeMs = newFrameTimes.Count > 0 ? newFrameTimes.Average() : 0;
+            var frame = _sampler.Sample(ts, frameTimeMs);
             _frames.Add(frame);
 
             VramUsedMb = frame.CommittedMb;
             RamFreeMb = frame.AvailableRamMb;
+            OnPropertyChanged(nameof(RamUsedGb));
+            OnPropertyChanged(nameof(RamText));
             GpuPercent = frame.Gpu3DPercent;
             CpuCorePercent = frame.MaxCorePercent;
 
-            var t = ts / 1000.0;
             Charts.VramMb.Add(frame.CommittedMb);
             Charts.RamMb.Add(frame.AvailableRamMb);
             Charts.GpuPercent.Add(frame.Gpu3DPercent);
             Charts.CpuCorePercent.Add(frame.MaxCorePercent);
+            // 没有帧数据时不补 0，否则曲线会出现假的"帧时间归零"
+            if (newFrameTimes.Count > 0) Charts.FrameMs.Add(frameTimeMs);
 
             ChartSampleCount = Charts.VramMb.Count;
 
             // 只保留最近 120 个点，避免长时间挂机把内存吃满
-            Trim(Charts.VramMb); Trim(Charts.RamMb); Trim(Charts.GpuPercent); Trim(Charts.CpuCorePercent);
+            Trim(Charts.VramMb); Trim(Charts.RamMb); Trim(Charts.GpuPercent);
+            Trim(Charts.CpuCorePercent); Trim(Charts.FrameMs);
         }
         catch (Exception ex)
         {
@@ -139,6 +174,51 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static void Trim(ObservableCollection<double> points)
     {
         while (points.Count > 120) points.RemoveAt(0);
+    }
+
+    private readonly List<double> _recentFrameTimes = [];
+
+    private string _frameTimeStatus = "帧时间采集未启动。检测到游戏进程后会自动接入 PresentMon。";
+    public string FrameTimeStatus
+    {
+        get => _frameTimeStatus;
+        private set
+        {
+            _frameTimeStatus = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(FrameTimeBannerVisibility));
+        }
+    }
+
+    /// <summary>没拿到帧数据时始终显示提示条，避免用户误以为"曲线平的就是不卡"。</summary>
+    public System.Windows.Visibility FrameTimeBannerVisibility =>
+        _recentFrameTimes.Count == 0 ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+
+    private void UpdateFrameTimeStatus()
+    {
+        if (_recentFrameTimes.Count == 0) return;
+
+        var stats = FrameTimeAnalyzer.Analyze(_recentFrameTimes);
+        FrameTimeStatus =
+            $"帧时间采样中：最近 {_recentFrameTimes.Count} 帧，平均 {stats.AverageFps:F0} FPS，" +
+            $"1% Low {stats.OnePercentLowFps:F0} FPS，卡顿尖峰 {stats.SpikeCount} 次。";
+        OnPropertyChanged(nameof(FrameTimeBannerVisibility));
+    }
+
+    /// <summary>尝试为指定游戏启动 PresentMon 采集。</summary>
+    public bool TryStartFrameCapture(string processName, int seconds = 900, string? explicitPath = null)
+    {
+        if (_frameTimes.IsRunning) return true;
+
+        var csv = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "GameOptimizer", "captures", $"{processName}-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
+
+        var ok = _frameTimes.Start(processName, csv, seconds, explicitPath);
+        FrameTimeStatus = ok
+            ? $"已连接 PresentMon，正在采集 {processName}。（若长时间无数据，检查是否具备 ETW 权限）"
+            : _frameTimes.LastError ?? "启动帧时间采集失败。";
+        return ok;
     }
 
     private int _chartSampleCount;
@@ -174,10 +254,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void ScanGames()
     {
-        _games = SteamLibraryScanner.Scan();
-        GameLibrarySummary = _games.Count == 0
-            ? "未发现 Steam 游戏库"
-            : $"已扫描到 {_games.Count} 款游戏";
+        // 聚合 Steam + WeGame，并剔除 Wallpaper Engine 这类非游戏
+        _games = NonGameFilter.Apply(GameLibrary.ScanAll());
+
+        if (_games.Count == 0)
+        {
+            GameLibrarySummary = "未发现已安装的游戏（支持 Steam 与 WeGame）";
+            return;
+        }
+
+        var byPlatform = _games
+            .GroupBy(g => g.Source)
+            .Select(g => $"{g.Key} {g.Count()} 款");
+
+        GameLibrarySummary = $"已扫描到 {_games.Count} 款游戏（{string.Join("，", byPlatform)}）";
     }
 
     private string _gameLibrarySummary = "";
@@ -212,6 +302,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void Shutdown()
     {
         _timer.Stop();
+        _frameTimes.Dispose();
+
         if (_gameMode.IsActive)
         {
             var errors = _gameMode.ExitWithReport();

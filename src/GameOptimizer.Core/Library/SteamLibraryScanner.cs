@@ -1,24 +1,18 @@
 namespace GameOptimizer.Core.Library;
 
 using System.Text.RegularExpressions;
-using GameOptimizer.Core.Models;
-
-/// <summary>一个被扫描到的游戏。</summary>
-public sealed record GameEntry(
-    string Name,
-    string AppId,
-    string InstallPath,
-    string? ExecutablePath,
-    double SizeOnDiskGb,
-    string Source);
 
 /// <summary>
 /// Steam 库扫描。只读解析 libraryfolders.vdf 与 appmanifest_*.acf，
 /// 不写任何文件、不调用 Steam 进程。
 /// </summary>
-public static class SteamLibraryScanner
+public sealed class SteamLibraryScanner : IGameLibraryScanner
 {
-    public static IReadOnlyList<GameEntry> Scan(string? steamRoot = null)
+    public string PlatformName => "Steam";
+
+    public IReadOnlyList<GameEntry> Scan() => Scan(null);
+
+    public static IReadOnlyList<GameEntry> Scan(string? steamRoot)
     {
         steamRoot ??= DetectSteamRoot();
         if (steamRoot is null || !Directory.Exists(steamRoot))
@@ -47,10 +41,7 @@ public static class SteamLibraryScanner
             }
         }
 
-        return results
-            .Where(g => !g.Name.Contains("Redistributable", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(g => g.SizeOnDiskGb)
-            .ToList();
+        return results.OrderByDescending(g => g.SizeOnDiskGb).ToList();
     }
 
     /// <summary>
