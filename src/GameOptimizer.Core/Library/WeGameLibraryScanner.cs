@@ -86,15 +86,19 @@ public sealed class WeGameLibraryScanner : IGameLibraryScanner
         if (!Directory.Exists(gameDir)) return null;
 
         var folder = Path.GetFileName(gameDir.TrimEnd('\\'));
-        var (name, appId) = ParseFolderName(folder);
+        var (folderName, appId) = ParseFolderName(folder);
 
         // 依赖库等非游戏目录
-        if (name.Contains("dependency_shared", StringComparison.OrdinalIgnoreCase)) return null;
-        if (name.Contains("common_redist", StringComparison.OrdinalIgnoreCase)) return null;
+        if (folderName.Contains("dependency_shared", StringComparison.OrdinalIgnoreCase)) return null;
+        if (folderName.Contains("common_redist", StringComparison.OrdinalIgnoreCase)) return null;
 
-        var exe = FindMainExecutable(gameDir, name);
+        // 目录名是英文工程名（DeltaForce），显示名走映射表（三角洲行动）
+        var displayName = WeGameDisplayNames.Resolve(appId, folderName);
+
+        // 挑主程序时用目录名匹配英文 exe，不能用中文显示名
+        var exe = FindMainExecutable(gameDir, folderName);
         return new GameEntry(
-            Name: name,
+            Name: displayName,
             AppId: appId,
             InstallPath: gameDir,
             ExecutablePath: exe,
