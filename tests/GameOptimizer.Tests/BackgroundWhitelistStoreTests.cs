@@ -23,9 +23,12 @@ public class BackgroundWhitelistStoreTests : IDisposable
     }
 
     [Fact]
-    public void 文件不存在时应返回默认名单()
+    public void 文件不存在时应返回空名单而不是默认全选()
     {
-        Store.Load().Should().BeEquivalentTo(BackgroundProcessWhitelist.Default);
+        // 勾选意味着「开启游戏模式会被强制关闭」，属于破坏性操作。
+        // 必须由用户主动勾选，不能替他决定——曾因默认全选，
+        // 用户一点开启就关掉了他正在用的软件。
+        Store.Load().Should().BeEmpty();
     }
 
     [Fact]
@@ -68,13 +71,13 @@ public class BackgroundWhitelistStoreTests : IDisposable
     }
 
     [Fact]
-    public void 文件损坏时应退回默认名单而不是抛异常()
+    public void 文件损坏时应退回空名单而不是抛异常()
     {
         var store = Store;
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         File.WriteAllText(_path, "{ 这不是合法 JSON ");
 
-        store.Load().Should().BeEquivalentTo(BackgroundProcessWhitelist.Default);
+        store.Load().Should().BeEmpty();
     }
 
     [Fact]

@@ -34,30 +34,28 @@ public sealed class BackgroundWhitelistStore
     public string FilePath => _path;
 
     /// <summary>
-    /// 读取勾选名单。文件不存在、损坏、或内容为空时返回默认名单，不抛异常——
-    /// 配置坏了不该让游戏模式整个用不了。
+    /// 读取勾选名单。文件不存在或损坏时返回<b>空集合</b>，不抛异常。
     /// </summary>
     /// <remarks>
-    /// 返回空集合表示「用户明确取消了全部勾选」，与「没有配置」是两种状态。
-    /// 所以这里用一个空文件里的空数组来判断，不会退回默认名单。
+    /// 默认是空的，不是默认名单：勾选意味着「开启游戏模式时会被强制关闭」，
+    /// 这是破坏性操作，必须由用户主动勾选，不能替他决定。
+    /// 实测教训：曾经默认全选，结果用户一点「开启游戏模式」就关掉了他正在用的软件。
     /// </remarks>
     public IReadOnlyList<string> Load()
     {
         try
         {
-            if (!File.Exists(_path)) return BackgroundProcessWhitelist.Default;
+            if (!File.Exists(_path)) return [];
 
             var json = File.ReadAllText(_path);
             var saved = JsonSerializer.Deserialize<WhitelistFile>(json, JsonOptions);
-
-            // 文件存在但解析不出内容 = 配置损坏，退回默认
-            if (saved is null) return BackgroundProcessWhitelist.Default;
+            if (saved is null) return [];
 
             return Normalize(saved.Processes ?? []);
         }
         catch
         {
-            return BackgroundProcessWhitelist.Default;
+            return [];
         }
     }
 
@@ -112,11 +110,5 @@ public sealed class BackgroundWhitelistStore
     private sealed class WhitelistFile
     {
         public List<string> Processes { get; set; } = [];
-
-        /// <summary>
-        /// 显式保存过就为 true。用于区分「用户取消了全部」与「从未配置」：
-        /// 前者不该被默认名单覆盖。
-        /// </summary>
-        public bool Configured { get; set; } = true;
     }
 }

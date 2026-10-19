@@ -142,7 +142,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string WhitelistStatus { get => _whitelistStatus; private set { _whitelistStatus = value; OnPropertyChanged(); } }
 
     /// <summary>当前勾选数量，让用户一眼看出「到底会关几个」。</summary>
-    public string WhitelistSummary => $"将结束 {Whitelist.Count(e => e.Enabled)} / {Whitelist.Count} 项";
+    public string WhitelistSummary
+    {
+        get
+        {
+            var on = Whitelist.Count(e => e.Enabled);
+            if (on == 0) return "尚未选择，开启游戏模式不会关闭任何程序";
+            return $"将结束 {on} / {Whitelist.Count} 项";
+        }
+    }
 
     private void LoadWhitelistFromDisk()
     {
