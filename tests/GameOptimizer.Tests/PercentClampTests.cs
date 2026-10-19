@@ -47,7 +47,7 @@ public class PercentClampTests
 
         for (var i = 0; i < 5; i++)
         {
-            var frame = sampler.Sample(i * 1000L, 0);
+            var frame = sampler.Sample(i * 1000L);
             frame.Gpu3DPercent.Should().BeInRange(0, 100);
             frame.MaxCorePercent.Should().BeInRange(0, 100);
         }
@@ -62,6 +62,6 @@ public class PercentClampTests
         sampler.Warmup(200);
 
         for (var i = 0; i < 20; i++)
-            sampler.Sample(i, 0).Gpu3DPercent.Should().BeInRange(0, 100);
+            sampler.Sample(i).Gpu3DPercent.Should().BeInRange(0, 100);
     }
 }

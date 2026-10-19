@@ -33,21 +33,29 @@ public class VersionConsistencyTests
     }
 
     [Fact]
-    public void 版本号不应是默认的1_0_0()
+    public void 程序集版本应与DirectoryBuildProps一致()
     {
-        // 若 Directory.Build.props 失效，会回退成 1.0.0.0
-        var v = AssemblyVersion;
-        (v.Major == 1 && v.Minor == 0 && v.Build == 0 && v.Revision == 0)
-            .Should().BeFalse("Directory.Build.props 里的版本号可能没有生效");
+        // 旧写法是「版本不应是默认的 1.0.0」，但 v1.0.0 之后这个数字本身就是合法版本，
+        // 那条断言会永久失败。改为直接比对 props 里的值 —— 真正要防的是
+        // 「改了 props 没生效」和「改了 props 忘了改测试」。
+        var props = File.ReadAllText(Path.Combine(RepoRoot(), "Directory.Build.props"));
+        var match = System.Text.RegularExpressions.Regex.Match(props, @"<Version>([\d.]+)</Version>");
+        match.Success.Should().BeTrue("Directory.Build.props 里必须有 <Version>");
+
+        var declared = Version.Parse(match.Groups[1].Value);
+
+        AssemblyVersion.Major.Should().Be(declared.Major);
+        AssemblyVersion.Minor.Should().Be(declared.Minor);
+        AssemblyVersion.Build.Should().Be(declared.Build);
     }
 
     [Fact]
-    public void 当前版本应为0_5_1()
+    public void 当前版本应为1_0_0()
     {
         // 版本号由用户手动设定；升级时改这里和 Directory.Build.props
-        AssemblyVersion.Major.Should().Be(0);
-        AssemblyVersion.Minor.Should().Be(5);
-        AssemblyVersion.Build.Should().Be(1);
+        AssemblyVersion.Major.Should().Be(1);
+        AssemblyVersion.Minor.Should().Be(0);
+        AssemblyVersion.Build.Should().Be(0);
     }
 
     [Fact]

@@ -8,8 +8,7 @@ public sealed record SampleFrame(
     double CommittedMb,
     double AvailableRamMb,
     double Gpu3DPercent,
-    double MaxCorePercent,
-    double FrameTimeMs);
+    double MaxCorePercent);
 
 /// <summary>显存判定口径：核显没有独立显存，必须同时看共享显存与系统内存余量。</summary>
 public enum VramVerdict

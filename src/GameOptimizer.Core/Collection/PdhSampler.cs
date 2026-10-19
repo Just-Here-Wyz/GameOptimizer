@@ -93,8 +93,8 @@ public sealed class PdhSampler : IDisposable
         _warmed = true;
     }
 
-    /// <summary>采一帧；帧时间由 <see cref="FrameTimeSource"/> 提供，没有时传 0。</summary>
-    public SampleFrame Sample(long timestampMs, double frameTimeMs)
+    /// <summary>采一帧。帧时间采集（PresentMon）已随「数据」页一并移除，这里只采系统指标。</summary>
+    public SampleFrame Sample(long timestampMs)
     {
         if (!IsReady)
             throw new InvalidOperationException($"采集器未就绪：{LastError}");
@@ -125,8 +125,7 @@ public sealed class PdhSampler : IDisposable
             // PDH 在两次读取间隔异常时会算出超过 100 的百分比（实测见过 123%），
             // 利用率语义上不可能越界，必须钳制，否则界面上会出现荒谬数字
             Gpu3DPercent: ClampPercent(gpuMax),
-            MaxCorePercent: ClampPercent(coreMax),
-            FrameTimeMs: frameTimeMs);
+            MaxCorePercent: ClampPercent(coreMax));
     }
 
     /// <summary>把百分比钳制到 [0,100]，并丢弃非有限值。</summary>

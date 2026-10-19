@@ -78,7 +78,7 @@ public class PrimaryAdapterTests
         if (!sampler.Initialize()) return;
         sampler.Warmup(200);
 
-        var frame = sampler.Sample(0, 0);
+        var frame = sampler.Sample(0);
 
         // 同一块显卡上，Commited 必然 >= Shared（共享是其中一部分）
         frame.CommittedMb.Should().BeGreaterThanOrEqualTo(frame.SharedUsedMb);

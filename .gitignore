@@ -23,3 +23,6 @@ captures/
 *.log
 Thumbs.db
 desktop.ini
+
+# 临时截图与验证产物
+.artifacts/

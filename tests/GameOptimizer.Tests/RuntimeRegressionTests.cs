@@ -71,7 +71,7 @@ public class RuntimeRegressionTests
         using var sampler = new PdhSampler();
         if (!sampler.Initialize()) return;
 
-        var act = () => sampler.Sample(0, 0);
+        var act = () => sampler.Sample(0);
         act.Should().Throw<InvalidOperationException>().WithMessage("*Warmup*");
     }
 
@@ -82,7 +82,7 @@ public class RuntimeRegressionTests
         if (!sampler.Initialize()) return;
         sampler.Warmup(200);
 
-        var frame = sampler.Sample(0, 0);
+        var frame = sampler.Sample(0);
 
         // 显存占用不可能超过 256GB，也不可能为负
         frame.CommittedMb.Should().BeInRange(0, 256 * 1024);

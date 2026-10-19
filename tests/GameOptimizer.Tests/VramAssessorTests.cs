@@ -7,7 +7,7 @@ using GameOptimizer.Core.Models;
 public class VramAssessorTests
 {
     private static SampleFrame Frame(double committedMb, double availableRamMb, double sharedMb = 0)
-        => new(0, 0, sharedMb, committedMb, availableRamMb, 0, 0, 16.7);
+        => new(0, 0, sharedMb, committedMb, availableRamMb, 0, 0);
 
     [Fact]
     public void 没有采样时应返回_Unknown()
