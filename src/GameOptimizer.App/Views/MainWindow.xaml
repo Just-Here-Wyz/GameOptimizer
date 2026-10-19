@@ -10,6 +10,13 @@
         FontFamily="Microsoft YaHei UI">
 
     <Window.Resources>
+        <!-- 勾选框在深色界面上必须显式给前景色，否则文字看不见 -->
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
         <!-- 左侧导航项：选中时左侧亮条 + 背景高亮 -->
         <Style x:Key="NavItem" TargetType="ListBoxItem">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
@@ -140,31 +147,84 @@
                     </StackPanel>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding Games}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Style="{StaticResource Card}">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="100"/>
-                                                <ColumnDefinition Width="110"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0">
-                                                <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
-                                                <TextBlock Text="{Binding Path}" Style="{StaticResource Muted}"
-                                                           TextTrimming="CharacterEllipsis"/>
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding SizeText}" VerticalAlignment="Center"/>
-                                            <TextBlock Grid.Column="2" Text="{Binding VerdictText}"
-                                                       Foreground="{Binding VerdictColor}"
-                                                       FontWeight="SemiBold" VerticalAlignment="Center"
-                                                       ToolTip="{Binding VerdictToolTip}"/>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel>
+                            <!-- 游戏模式：结束后台白名单，可自行勾选 -->
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="开启游戏模式时结束后台" FontWeight="SemiBold" FontSize="14"/>
+                                            <TextBlock Text="{Binding WhitelistSummary}" Style="{StaticResource Muted}"
+                                                       Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                            <Button Content="全选" Command="{Binding SelectAllWhitelistCommand}"
+                                                    Padding="10,5" Margin="0,0,8,0" Background="#FF3A3F4A"/>
+                                            <Button Content="全不选" Command="{Binding ClearWhitelistCommand}"
+                                                    Padding="10,5" Margin="0,0,8,0" Background="#FF3A3F4A"/>
+                                            <Button Content="刷新列表" Command="{Binding ReloadWhitelistCommand}"
+                                                    Padding="10,5" Background="#FF3A3F4A"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <TextBlock Text="{Binding WhitelistStatus}" Style="{StaticResource Muted}" Margin="0,8,0,4"/>
+
+                                    <ItemsControl ItemsSource="{Binding Whitelist}" Margin="0,4,0,0">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="0,4,18,4" MinWidth="150">
+                                                    <CheckBox Content="{Binding DisplayName}"
+                                                              IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                                              Foreground="{StaticResource TextPrimary}"
+                                                              FontFamily="Microsoft YaHei UI" FontSize="12"/>
+                                                    <TextBlock Text="{Binding NameHint}" Style="{StaticResource Muted}"
+                                                               Margin="22,0,0,0" FontSize="11"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <TextBlock Text="{Binding WhitelistPath}" Style="{StaticResource Muted}"
+                                               Margin="0,8,0,0" TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding WhitelistPath}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <ItemsControl ItemsSource="{Binding Games}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource Card}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="100"/>
+                                                    <ColumnDefinition Width="110"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
+                                                    <TextBlock Text="{Binding Path}" Style="{StaticResource Muted}"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1" Text="{Binding SizeText}" VerticalAlignment="Center"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding VerdictText}"
+                                                           Foreground="{Binding VerdictColor}"
+                                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           ToolTip="{Binding VerdictToolTip}"/>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </ScrollViewer>
                 </Grid>
 

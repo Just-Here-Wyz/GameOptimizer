@@ -69,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File tools\verify-frametime.ps1
 ```
 src/GameOptimizer.Core     采集、判定、归因（无 UI 依赖，可单测）
 src/GameOptimizer.App      WPF 界面
-tests/GameOptimizer.Tests  215 个 xUnit 用例
+tests/GameOptimizer.Tests  272 个 xUnit 用例
 tools/                     运维脚本（ETW 授权、链路验证）
 docs/                      项目文档
 ```

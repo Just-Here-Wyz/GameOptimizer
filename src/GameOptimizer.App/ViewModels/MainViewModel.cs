@@ -26,6 +26,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly PdhSampler _sampler;
     private readonly FrameTimeSource _frameTimes = new();
     private readonly GameModeController _gameMode;
+    private readonly BackgroundWhitelistStore _whitelistStore = new();
     private readonly DispatcherTimer _timer;
     private readonly Stopwatch _clock = new();
     private readonly List<SampleFrame> _frames = [];
@@ -48,7 +49,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ToggleGameModeCommand = new RelayCommand(_ => ToggleGameMode());
         ToggleMonitorCommand = new RelayCommand(_ => ToggleMonitor());
         ToggleFrameCaptureCommand = new RelayCommand(_ => ToggleFrameCapture());
+        SelectAllWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(true));
+        ClearWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(false));
+        ReloadWhitelistCommand = new RelayCommand(_ => LoadWhitelistFromDisk());
 
+        LoadWhitelistFromDisk();
         ScanGames();
         RefreshAllGameStatus();
 
@@ -81,6 +86,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public RelayCommand ScanGamesCommand { get; }
     public RelayCommand ToggleGameModeCommand { get; }
+    public RelayCommand SelectAllWhitelistCommand { get; }
+    public RelayCommand ClearWhitelistCommand { get; }
+    public RelayCommand ReloadWhitelistCommand { get; }
     public RelayCommand ToggleMonitorCommand { get; }
     public RelayCommand ToggleFrameCaptureCommand { get; }
 
@@ -121,6 +129,125 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isGameModeOn;
     public bool IsGameModeOn { get => _isGameModeOn; private set { _isGameModeOn = value; OnPropertyChanged(); OnPropertyChanged(nameof(GameModeButtonText)); } }
     public string GameModeButtonText => IsGameModeOn ? "退出游戏模式" : "开启游戏模式";
+
+    // ---------- 结束后台白名单（用户可自定义） ----------
+
+    /// <summary>白名单条目，带勾选状态。勾上 = 开启游戏模式时会结束它。</summary>
+    public ObservableCollection<WhitelistEntry> Whitelist { get; } = [];
+
+    /// <summary>白名单配置文件的真实路径，界面要显示出来方便用户手改。</summary>
+    public string WhitelistPath => _whitelistStore.FilePath;
+
+    private string _whitelistStatus = "";
+    public string WhitelistStatus { get => _whitelistStatus; private set { _whitelistStatus = value; OnPropertyChanged(); } }
+
+    /// <summary>当前勾选数量，让用户一眼看出「到底会关几个」。</summary>
+    public string WhitelistSummary => $"将结束 {Whitelist.Count(e => e.Enabled)} / {Whitelist.Count} 项";
+
+    private void LoadWhitelistFromDisk()
+    {
+        var saved = _whitelistStore.Load();
+        foreach (var e in Whitelist) e.PropertyChanged -= OnWhitelistEntryChanged;
+        Whitelist.Clear();
+
+        // 只列出「此刻确实在运行」的应用——没打开的程序列出来只会干扰判断。
+        // 勾选状态另存为一份名单，与「显示哪些」分开：
+        // 否则关掉的应用下次启动又被勾上，用户的取消勾选会丢失。
+        var running = DetectRunningCandidates();
+
+        foreach (var name in running.OrderBy(n => ProcessDisplayNames.Resolve(n), StringComparer.OrdinalIgnoreCase))
+        {
+            var entry = new WhitelistEntry(name) { Enabled = saved.Contains(name) };
+            entry.PropertyChanged += OnWhitelistEntryChanged;
+            Whitelist.Add(entry);
+        }
+
+        WhitelistStatus = Whitelist.Count == 0
+            ? "当前没有可结束的后台应用"
+            : $"当前运行 {Whitelist.Count} 项";
+        OnPropertyChanged(nameof(WhitelistSummary));
+    }
+
+    /// <summary>
+    /// 找出「本机正在运行、且属于可结束范围」的进程名。
+    /// 排除：必要进程（系统服务 / Windows 组件 / 安全软件）、本程序自身。
+    /// </summary>
+    private static List<string> DetectRunningCandidates()
+    {
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var serviceNames = EssentialProcessGuard.LoadServiceImageNames();
+
+        // 预设名单是「可能该关的候选」。不扫描全部进程，
+        // 否则会出现一堆用户没装、也不该由我们处置的进程。
+        foreach (var name in BackgroundProcessWhitelist.Strong)
+        {
+            if (BackgroundProcessWhitelist.IsProtected(name)) continue;
+
+            System.Diagnostics.Process[] procs;
+            try { procs = System.Diagnostics.Process.GetProcessesByName(name); }
+            catch { continue; }
+
+            foreach (var p in procs)
+            {
+                try
+                {
+                    var identity = EssentialProcessGuard.Identify(p);
+                    if (!EssentialProcessGuard.IsEssential(identity, serviceNames))
+                        candidates.Add(name);
+                }
+                catch { }
+                finally { p.Dispose(); }
+            }
+        }
+
+        return [.. candidates];
+    }
+
+    private void OnWhitelistEntryChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(WhitelistEntry.Enabled)) return;
+        OnPropertyChanged(nameof(WhitelistSummary));
+        SaveWhitelist();
+    }
+
+    private void SaveWhitelist()
+    {
+        // 保存的是「勾选状态」，包含用户主动取消勾选的项吗？不需要——
+        // 未勾选就是没勾选，读回来时默认也不勾。这里只存勾上的。
+        var names = Whitelist.Where(e => e.Enabled).Select(e => e.Name).ToList();
+
+        WhitelistStatus = _whitelistStore.Save(names, out var error)
+            ? $"已保存：{names.Count} 项会在开启时结束"
+            : $"保存失败：{error}";
+    }
+
+    /// <summary>把当前勾选结果同步到游戏模式的结束进程动作上。</summary>
+    private void ApplyWhitelistToGameMode()
+    {
+        var names = Whitelist.Where(e => e.Enabled).Select(e => e.Name).ToList();
+
+        // 一项都没勾 = 用户不想结束任何进程，此时不要再偷偷套默认名单，
+        // 否则会出现「我明明全取消了，它还是关了我的软件」。
+        _gameMode.Replace<EndProcessAction>(new EndProcessAction(names));
+    }
+
+    private void ResetWhitelistToStrong()
+    {
+        LoadWhitelistFromDisk();
+    }
+
+    private void SetAllWhitelist(bool enabled)
+    {
+        foreach (var e in Whitelist)
+        {
+            e.PropertyChanged -= OnWhitelistEntryChanged;
+            e.Enabled = enabled;
+            e.PropertyChanged += OnWhitelistEntryChanged;
+        }
+
+        OnPropertyChanged(nameof(WhitelistSummary));
+        SaveWhitelist();
+    }
 
     private bool _isMonitoring = true;
     public bool IsMonitoring { get => _isMonitoring; private set { _isMonitoring = value; OnPropertyChanged(); OnPropertyChanged(nameof(MonitorButtonText)); } }
@@ -353,7 +480,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             .Select(g => $"{g.Key} {g.Count()} 款");
 
         GameLibrarySummary = $"已扫描到 {_games.Count} 款游戏（{string.Join("，", byPlatform)}）";
+
+        // 显卡偏好需要一个具体的 exe。旧版本从未赋值，这项动作一直在空转，
+        // 却让用户以为「已经优化过了」。优先挑体积最大的那款游戏。
+        var gpuPref = _gameMode.Actions.OfType<GpuPreferenceAction>().FirstOrDefault();
+        var target = _games.FirstOrDefault(g => !string.IsNullOrWhiteSpace(g.ExecutablePath));
+        if (gpuPref is not null) gpuPref.TargetApp = target?.ExecutablePath;
+        GpuPreferenceTarget = target is null
+            ? "显卡偏好：未找到游戏程序"
+            : $"显卡偏好目标：{target.Name}";
     }
+
+    private string _gpuPreferenceTarget = "";
+    public string GpuPreferenceTarget { get => _gpuPreferenceTarget; private set { _gpuPreferenceTarget = value; OnPropertyChanged(); } }
 
     private string _gameLibrarySummary = "";
     public string GameLibrarySummary { get => _gameLibrarySummary; private set { _gameLibrarySummary = value; OnPropertyChanged(); } }
@@ -370,11 +509,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        // 每次开启前把界面上的勾选同步过去，用户刚改的白名单立刻生效
+        ApplyWhitelistToGameMode();
+
         var enterErrors = _gameMode.Enter();
         IsGameModeOn = _gameMode.IsActive;
-        GameModeStatus = enterErrors.Count == 0
-            ? "游戏模式：已开启"
-            : "游戏模式：开启失败并已回滚 — " + string.Join("；", enterErrors);
+
+        if (enterErrors.Count > 0)
+        {
+            GameModeStatus = "游戏模式：开启失败并已回滚 — " + string.Join("；", enterErrors);
+            return;
+        }
+
+        // 不能只说「已开启」：必须让用户看到结束了几个进程。
+        // 上一版显示已开启，实际一个进程都没关。
+        var killed = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
+        var detail = killed is null ? "" : $"；{killed.Summary}";
+        GameModeStatus = $"游戏模式：已开启{detail}；关闭时进程需手动重开";
     }
 
     private void ToggleMonitor()
@@ -476,6 +627,32 @@ public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessmen
             _ => "实测：本次会话显存不足",
         }
         : "";
+}
+
+/// <summary>白名单中的一个可勾选进程名。</summary>
+public sealed class WhitelistEntry(string name) : INotifyPropertyChanged
+{
+    public string Name { get; } = name;
+
+    /// <summary>看得懂的应用名。白名单里显示这个，而不是 wallpaper64 这种进程名。</summary>
+    public string DisplayName { get; } = ProcessDisplayNames.Resolve(name);
+
+    /// <summary>与进程名不同时才在界面附注，避免重复显示。</summary>
+    public string NameHint { get; } = ProcessDisplayNames.HasName(name) ? name : "";
+
+    private bool _enabled;
+    public bool Enabled
+    {
+        get => _enabled;
+        set
+        {
+            if (_enabled == value) return;
+            _enabled = value;
+            PropertyChanged?.Invoke(this, new(nameof(Enabled)));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
 }
 
 /// <summary>最小命令实现，避免为一个按钮引入 MVVM 框架。</summary>
