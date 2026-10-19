@@ -7,25 +7,28 @@ using System.Globalization;
 /// 帧时间来源：调用 Intel PresentMon 控制台程序抓逐帧数据。
 ///
 /// 实测要点（PresentMon 2.6.0）：
-/// - 参数是 --process_name / --output_file / --timed，不存在 --terminate_after_timed；
-/// - 启动 ETW 会话需要管理员或 Performance Log Users 组成员身份，
-///   否则退出码 6 并报 "failed to start trace session: access denied"；
-/// - CSV 第一列是 Application，msBetweenPresents 在 v1 指标里存在，
-///   v2 指标里改叫 FrameTime，两种都要能读。
+/// - 参数是 --process_name / --timed / --session_name，不存在 --terminate_after_timed；
+/// - 启动 ETW 会话需要管理员或 Performance Log Users 组成员身份，否则退出码 6 + "access denied"；
+/// - --output_file 写出的 CSV 是【独占】打开的，采集期间外部连只读都打不开
+///   （实测 FileShare.ReadWrite 仍报 in use），因此不能靠轮询文件；
+/// - 改用 --output_stdout 流式读取，进程一边跑一边产出 CSV 行。
 /// </summary>
 public sealed class FrameTimeSource : IDisposable
 {
     private Process? _process;
-    private string? _csvPath;
-    private long _readOffset;
     private readonly List<string> _header = [];
+    private readonly List<double> _pending = [];
+    private readonly object _lock = new();
+    private readonly System.Text.StringBuilder _stderr = new();
+    private int _frameTimeIndex = -1;
     private bool _headerParsed;
-    private long _csvColumns;
-    private int _msBetweenIndex = -1;
 
     public bool IsRunning => _process is { HasExited: false };
 
     public string? LastError { get; private set; }
+
+    /// <summary>本次采集写入的 CSV 备份路径（便于事后分析）。</summary>
+    public string? CsvPath { get; private set; }
 
     /// <summary>PresentMon 是否已装且可执行。</summary>
     public static string? DefaultPath(string installRoot = @"E:\dsh-插件\PresentMon")
@@ -37,10 +40,10 @@ public sealed class FrameTimeSource : IDisposable
     }
 
     /// <summary>
-    /// 启动采集。processName 不含 .exe。
+    /// 启动采集。processName 是实际运行的进程名（不含 .exe 也可）。
     /// 用 --timed 自动停止，避免进程残留。
     /// </summary>
-    public bool Start(string processName, string csvPath, int seconds, string? presentMonPath = null)
+    public bool Start(string processName, string? csvBackupPath = null, int seconds = 900, string? presentMonPath = null)
     {
         presentMonPath ??= DefaultPath();
         if (presentMonPath is null || !File.Exists(presentMonPath))
@@ -57,12 +60,15 @@ public sealed class FrameTimeSource : IDisposable
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(csvPath)!);
-            _csvPath = csvPath;
-            _readOffset = 0;
-            _headerParsed = false;
-            _header.Clear();
-            _msBetweenIndex = -1;
+            lock (_lock)
+            {
+                _header.Clear();
+                _pending.Clear();
+                _stderr.Clear();
+                _frameTimeIndex = -1;
+                _headerParsed = false;
+            }
+            CsvPath = csvBackupPath;
 
             var psi = new ProcessStartInfo
             {
@@ -75,30 +81,27 @@ public sealed class FrameTimeSource : IDisposable
             psi.ArgumentList.Add("--process_name");
             psi.ArgumentList.Add(processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
                 ? processName : processName + ".exe");
-            psi.ArgumentList.Add("--output_file");
-            psi.ArgumentList.Add(csvPath);
+            psi.ArgumentList.Add("--output_stdout");
             psi.ArgumentList.Add("--timed");
             psi.ArgumentList.Add(seconds.ToString(CultureInfo.InvariantCulture));
             psi.ArgumentList.Add("--no_console_stats");
+            // 避开其他程序已启动的同名会话（实测 --output_file 的残留会话会阻塞新采集）
+            psi.ArgumentList.Add("--session_name");
+            psi.ArgumentList.Add($"GameOptimizer-{Environment.ProcessId}");
 
             _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            // 异步收集 stderr：不读会把管道写满导致子进程卡住，
-            // 而且拿不到 "access denied" 这种关键错误，界面就会显示虚假的"正在采集"
-            _process.ErrorDataReceived += (_, e) =>
-            {
-                if (string.IsNullOrWhiteSpace(e.Data)) return;
-                lock (_stderrLock) { _stderr.AppendLine(e.Data); }
-            };
+            _process.OutputDataReceived += OnStdoutLine;
+            _process.ErrorDataReceived += OnStderrLine;
+
             _process.Start();
+            _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
 
             // 给它一点时间暴露启动期错误（ETW 权限失败会在毫秒级返回）
             if (_process.WaitForExit(StartupGraceMs))
             {
-                var err = ReadStderr();
-                LastError = DescribeFailure(err, _process.ExitCode);
-                _process.Dispose();
-                _process = null;
+                LastError = DescribeFailure(ReadStderr(), _process.ExitCode);
+                Cleanup();
                 return false;
             }
 
@@ -107,111 +110,69 @@ public sealed class FrameTimeSource : IDisposable
         catch (Exception ex)
         {
             LastError = $"启动 PresentMon 失败：{ex.Message}";
+            Cleanup();
             return false;
         }
     }
 
     private const int StartupGraceMs = 1500;
-    private readonly object _stderrLock = new();
-    private readonly System.Text.StringBuilder _stderr = new();
 
-    private string ReadStderr()
+    private void OnStdoutLine(object sender, DataReceivedEventArgs e)
     {
-        lock (_stderrLock) { return _stderr.ToString(); }
-    }
-
-    /// <summary>把 PresentMon 的 stderr 翻译成用户能看懂的原因。</summary>
-    internal static string DescribeFailure(string stderr, int exitCode)
-    {
-        if (stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
-            return "无法启动 ETW 追踪会话（access denied）：需要管理员身份运行本程序，" +
-                   "或把当前账号加入 Performance Log Users 组后重新登录。";
-
-        if (stderr.Contains("no trace session", StringComparison.OrdinalIgnoreCase))
-            return $"PresentMon 无法创建追踪会话：{stderr.Trim()}";
-
-        if (stderr.Contains("failed", StringComparison.OrdinalIgnoreCase))
-            return $"PresentMon 启动失败（退出码 {exitCode}）：{stderr.Trim()}";
-
-        return $"PresentMon 意外退出（退出码 {exitCode}）：{stderr.Trim()}";
-    }
-
-    /// <summary>采集过程中是否已异常退出。</summary>
-    public bool HasFailed(out string? error)
-    {
-        error = null;
-        if (_process is null) return false;
+        if (string.IsNullOrWhiteSpace(e.Data)) return;
 
         try
         {
-            if (!_process.HasExited) return false;
-
-            var stderr = ReadStderr();
-            // 用 --timed 正常结束时应退出码 0 且无 access denied
-            if (_process.ExitCode != 0 || stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
+            var line = e.Data.TrimEnd('\r');
+            lock (_lock)
             {
-                error = DescribeFailure(stderr, _process.ExitCode);
-                return true;
+                if (!_headerParsed)
+                {
+                    _header.AddRange(line.Split(','));
+                    _frameTimeIndex = FindFrameTimeColumn(_header);
+                    _headerParsed = true;
+                    return;
+                }
+
+                if (_frameTimeIndex < 0) return;
+                var cols = line.Split(',');
+                if (cols.Length <= _frameTimeIndex) return;
+
+                if (double.TryParse(cols[_frameTimeIndex], NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out var ms) && ms > 0)
+                {
+                    _pending.Add(ms);
+                    // 防止程序卡住时无限堆积
+                    if (_pending.Count > 10000) _pending.RemoveRange(0, _pending.Count - 10000);
+                }
             }
-            return false;
         }
         catch
         {
-            return false;
+            // 单行解析失败不应中断采集
         }
     }
 
-    /// <summary>
-    /// 增量读取 CSV 中新增的帧时间（毫秒）。每次采样后调用。
-    /// 只读新增字节，避免每轮重扫整个文件。
-    /// </summary>
+    private void OnStderrLine(object sender, DataReceivedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(e.Data)) return;
+        lock (_lock) { _stderr.AppendLine(e.Data); }
+    }
+
+    private string ReadStderr()
+    {
+        lock (_lock) { return _stderr.ToString(); }
+    }
+
+    /// <summary>取走自上次调用以来新到的帧时间（毫秒）。</summary>
     public IReadOnlyList<double> PollNewFrameTimes()
     {
-        if (_csvPath is null || !File.Exists(_csvPath)) return [];
-        try
+        lock (_lock)
         {
-            using var fs = new FileStream(_csvPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (fs.Length <= _readOffset) return [];
-
-            fs.Seek(_readOffset, SeekOrigin.Begin);
-            using var reader = new StreamReader(fs);
-            var text = reader.ReadToEnd();
-            _readOffset = fs.Position;
-
-            var results = new List<double>();
-            foreach (var line in text.Split('\n'))
-            {
-                var trimmed = line.TrimEnd('\r');
-                if (trimmed.Length == 0) continue;
-
-                if (!_headerParsed)
-                {
-                    _header.AddRange(trimmed.Split(','));
-                    _csvColumns = _header.Count;
-                    _msBetweenIndex = FindFrameTimeColumn(_header);
-                    _headerParsed = true;
-                    continue;
-                }
-
-                if (_msBetweenIndex < 0) continue;
-                var cols = trimmed.Split(',');
-                if (cols.Length <= _msBetweenIndex) continue;
-                if (double.TryParse(cols[_msBetweenIndex], NumberStyles.Float,
-                        CultureInfo.InvariantCulture, out var ms) && ms > 0)
-                {
-                    results.Add(ms);
-                }
-            }
-            return results;
-        }
-        catch (IOException)
-        {
-            return []; // 文件正被写入，下轮再读
-        }
-        catch (Exception ex)
-        {
-            LastError = $"读取帧时间失败：{ex.Message}";
-            return [];
+            if (_pending.Count == 0) return [];
+            var result = _pending.ToArray();
+            _pending.Clear();
+            return result;
         }
     }
 
@@ -232,38 +193,55 @@ public sealed class FrameTimeSource : IDisposable
         return -1;
     }
 
-    /// <summary>等待采集结束并返回最终错误信息（用于把"没有权限"明确告知用户）。</summary>
-    public string? WaitForExit(int timeoutMs)
+    /// <summary>是否已解析出表头（用于判断采集是否真的在产出数据）。</summary>
+    public bool HasHeader
     {
-        if (_process is null) return LastError;
+        get { lock (_lock) { return _headerParsed && _frameTimeIndex >= 0; } }
+    }
+
+    /// <summary>把 PresentMon 的 stderr 翻译成用户能看懂的原因。</summary>
+    internal static string DescribeFailure(string stderr, int exitCode)
+    {
+        if (stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
+            return "无法启动 ETW 追踪会话（access denied）：需要以管理员身份运行本程序，" +
+                   "或把当前账号加入 Performance Log Users 组并重新登录。";
+
+        if (stderr.Contains("already running", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            return "已有同名 ETW 追踪会话在运行，请稍后重试（可能是上次采集未正常结束）。";
+
+        if (stderr.Contains("failed", StringComparison.OrdinalIgnoreCase))
+            return $"PresentMon 启动失败（退出码 {exitCode}）：{stderr.Trim()}";
+
+        return $"PresentMon 意外退出（退出码 {exitCode}）：{stderr.Trim()}";
+    }
+
+    /// <summary>采集过程中是否已异常退出。</summary>
+    public bool HasFailed(out string? error)
+    {
+        error = null;
+        if (_process is null) return false;
+
         try
         {
-            if (!_process.WaitForExit(timeoutMs))
-            {
-                LastError ??= "PresentMon 未在预期时间内结束。";
-                return LastError;
-            }
+            if (!_process.HasExited) return false;
 
-            var stderr = _process.StandardError.ReadToEnd();
-            if (!string.IsNullOrWhiteSpace(stderr)
-                && stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
+            var stderr = ReadStderr();
+            if (_process.ExitCode != 0
+                || stderr.Contains("access denied", StringComparison.OrdinalIgnoreCase))
             {
-                LastError = "PresentMon 无权启动追踪：需要管理员身份，或把当前账号加入 Performance Log Users 组（见 tools/enable-presentmon-etw.ps1）。";
+                error = DescribeFailure(stderr, _process.ExitCode);
+                return true;
             }
-            else if (_process.ExitCode != 0)
-            {
-                LastError = $"PresentMon 退出码 {_process.ExitCode}：{stderr.Trim()}";
-            }
-            return LastError;
+            return false;
         }
-        catch (Exception ex)
+        catch
         {
-            LastError = $"等待 PresentMon 结束失败：{ex.Message}";
-            return LastError;
+            return false;
         }
     }
 
-    public void Dispose()
+    private void Cleanup()
     {
         try
         {
@@ -276,5 +254,10 @@ public sealed class FrameTimeSource : IDisposable
         }
         catch { }
         _process = null;
+    }
+
+    public void Dispose()
+    {
+        Cleanup();
     }
 }

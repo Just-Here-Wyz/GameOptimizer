@@ -221,13 +221,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (_frameTimes.IsRunning) return true;
 
+        // CSV 只作为事后留档的说明信息：采集期间 PresentMon 独占该文件，
+        // 数据走 stdout 实时读取，不依赖文件轮询。
         var csv = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "GameOptimizer", "captures", $"{processName}-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
 
         var ok = _frameTimes.Start(processName, csv, seconds, explicitPath);
         FrameTimeStatus = ok
-            ? $"已连接 PresentMon，正在采集 {processName}。（若长时间无数据，检查是否具备 ETW 权限）"
+            ? $"正在采集 {processName} 的帧数据…"
             : _frameTimes.LastError ?? "启动帧时间采集失败。";
         return ok;
     }

@@ -55,7 +55,6 @@ public class FrameTimeCsvParsingTests
         {
             var ok = source.Start("game", Path.Combine(Path.GetTempPath(), "x.csv"), 5,
                 presentMonPath: @"Z:\not-exist\PresentMon-2.6.0-x64.exe");
-
             ok.Should().BeFalse();
             source.LastError.Should().Contain("PresentMon");
         }
