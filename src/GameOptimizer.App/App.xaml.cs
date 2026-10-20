@@ -203,17 +203,21 @@ public partial class App : Application
     private static extern bool DestroyIcon(IntPtr hIcon);
 
     /// <summary>
-    /// 组装游戏模式：只关闭不必要的后台进程。
+    /// 组装游戏模式：关闭不必要的后台进程 + 释放闲置内存。
     ///
     /// 刻意不包含「显卡性能偏好」——核显机器上没有可调度的独立 GPU，
     /// 写那个注册表键不会有任何效果，属于看着优化了实则空转的项。
     /// 白名单与力度由用户可改（见 BackgroundWhitelistSettings）。
+    ///
+    /// 内存清理用 AddOptional 注册：受限环境下可能整轮被拒（全部 AccessDenied），
+    /// 属于锦上添花的一项，不该让用户连电源计划都开不起来；失败进 Warnings 上报界面。
     /// </summary>
     private static GameModeController BuildGameMode()
     {
         var mode = new GameModeController(new GameModeStateStore());
         mode.Add(new PowerPlanAction());
         mode.Add(new EndProcessAction(BackgroundProcessWhitelist.Default));
+        mode.AddOptional(new MemoryCleanAction());
         return mode;
     }
 }

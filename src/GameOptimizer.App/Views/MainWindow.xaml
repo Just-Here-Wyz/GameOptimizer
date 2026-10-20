@@ -27,6 +27,8 @@
         <!-- bool → 可见性；null → 收起（图标兜底用） -->
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
         <views:NullToCollapsedInverseConverter x:Key="NullToCollapsedInverse"/>
+        <!-- 空字符串 → 收起：未提权提示、优化结果有内容才占位 -->
+        <views:StringToVisibilityConverter x:Key="StringToVisibility"/>
         <!--
           左侧导航项：参考图没有左侧大栏，但工具本身靠它切页。
           这里把它压窄（72px）、去掉卡片感，做成图标 + 文字的紧凑竖排，
@@ -174,32 +176,56 @@
                             <StackPanel>
                                 <!-- 四项占用仪表盘 -->
                                 <Border Style="{StaticResource Card}" Padding="8,18,8,18">
-                                    <UniformGrid Columns="4">
-                                        <StackPanel HorizontalAlignment="Center">
-                                            <views:PercentGauge Width="104" Height="104" Value="{Binding VramPercent}"/>
-                                            <TextBlock Text="显存占用" HorizontalAlignment="Center" Margin="0,10,0,2"/>
-                                            <TextBlock Text="{Binding VramText}" Style="{StaticResource Faint}"
-                                                       HorizontalAlignment="Center"/>
-                                        </StackPanel>
-                                        <StackPanel HorizontalAlignment="Center">
-                                            <views:PercentGauge Width="104" Height="104" Value="{Binding RamPercent}"/>
-                                            <TextBlock Text="内存占用" HorizontalAlignment="Center" Margin="0,10,0,2"/>
-                                            <TextBlock Text="{Binding RamText}" Style="{StaticResource Faint}"
-                                                       HorizontalAlignment="Center"/>
-                                        </StackPanel>
-                                        <StackPanel HorizontalAlignment="Center">
-                                            <views:PercentGauge Width="104" Height="104" Value="{Binding GpuPercent}"/>
-                                            <TextBlock Text="GPU 3D" HorizontalAlignment="Center" Margin="0,10,0,2"/>
-                                            <TextBlock Text="实时利用率" Style="{StaticResource Faint}"
-                                                       HorizontalAlignment="Center"/>
-                                        </StackPanel>
-                                        <StackPanel HorizontalAlignment="Center">
-                                            <views:PercentGauge Width="104" Height="104" Value="{Binding CpuCorePercent}"/>
-                                            <TextBlock Text="CPU 单核峰值" HorizontalAlignment="Center" Margin="0,10,0,2"/>
-                                            <TextBlock Text="占用最高的一个核" Style="{StaticResource Faint}"
-                                                       HorizontalAlignment="Center"/>
-                                        </StackPanel>
-                                    </UniformGrid>
+                                    <StackPanel>
+                                        <UniformGrid Columns="4">
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <views:PercentGauge Width="104" Height="104" Value="{Binding VramPercent}"/>
+                                                <TextBlock Text="显存占用" HorizontalAlignment="Center" Margin="0,10,0,2"/>
+                                                <TextBlock Text="{Binding VramText}" Style="{StaticResource Faint}"
+                                                           HorizontalAlignment="Center"/>
+                                            </StackPanel>
+
+                                            <!-- 内存：v2.0.0 起仪表下方接「优化」按钮与三态结果 -->
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <views:PercentGauge Width="104" Height="104" Value="{Binding RamPercent}"/>
+                                                <TextBlock Text="内存占用" HorizontalAlignment="Center" Margin="0,10,0,2"/>
+                                                <TextBlock Text="{Binding RamText}" Style="{StaticResource Faint}"
+                                                           HorizontalAlignment="Center"/>
+
+                                                <Button Content="{Binding OptimizeButtonText}"
+                                                        Command="{Binding OptimizeMemoryCommand}"
+                                                        Background="{Binding OptimizeButtonHex}"
+                                                        Style="{StaticResource PrimaryButton}"
+                                                        Padding="18,5" Margin="0,8,0,0"
+                                                        HorizontalAlignment="Center"
+                                                        ToolTip="把闲置内存置换到虚拟内存，不会结束任何进程"/>
+
+                                                <TextBlock Text="{Binding MemoryOptimizeStatus}"
+                                                           Foreground="{Binding MemoryOptimizeStatusHex}"
+                                                           FontSize="10" TextWrapping="Wrap" TextAlignment="Center"
+                                                           MaxWidth="150" Margin="0,6,0,0"/>
+                                            </StackPanel>
+
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <views:PercentGauge Width="104" Height="104" Value="{Binding GpuPercent}"/>
+                                                <TextBlock Text="GPU 3D" HorizontalAlignment="Center" Margin="0,10,0,2"/>
+                                                <TextBlock Text="实时利用率" Style="{StaticResource Faint}"
+                                                           HorizontalAlignment="Center"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <views:PercentGauge Width="104" Height="104" Value="{Binding CpuCorePercent}"/>
+                                                <TextBlock Text="CPU 单核峰值" HorizontalAlignment="Center" Margin="0,10,0,2"/>
+                                                <TextBlock Text="占用最高的一个核" Style="{StaticResource Faint}"
+                                                           HorizontalAlignment="Center"/>
+                                            </StackPanel>
+                                        </UniformGrid>
+
+                                        <!-- 未提权时的常驻提示：先说明再让用户点，别等点了才报错 -->
+                                        <TextBlock Text="{Binding ElevationHint}"
+                                                   Visibility="{Binding ElevationHint, Converter={StaticResource StringToVisibility}}"
+                                                   Foreground="#FFFF9F0A" FontSize="11" TextWrapping="Wrap"
+                                                   HorizontalAlignment="Center" Margin="0,10,0,0"/>
+                                    </StackPanel>
                                 </Border>
 
                                 <!-- 颜色图例：让用户知道四档颜色怎么读 -->

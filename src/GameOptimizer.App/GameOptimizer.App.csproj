@@ -12,6 +12,8 @@
     <UseWPF>true</UseWPF>
     <!-- 托盘图标（NotifyIcon）属于 WinForms，与 WPF 共存 -->
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- 内存清理 / 电源计划 / 网络参数需要管理员：清单里声明 requireAdministrator，双击即提权 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
 </Project>

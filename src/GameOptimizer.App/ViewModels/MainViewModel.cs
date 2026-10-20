@@ -16,6 +16,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly GameModeController _gameMode;
     private readonly BackgroundWhitelistStore _whitelistStore = new();
     private readonly PeripheralScanner _peripherals = new();
+    private readonly MemoryCleanAction _memoryClean = new();
     private readonly DispatcherTimer _timer;
     private IReadOnlyList<GameEntry> _games = [];
 
@@ -39,6 +40,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ClearWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(false));
         ReloadWhitelistCommand = new RelayCommand(_ => LoadWhitelistFromDisk());
         ScanPeripheralsCommand = new RelayCommand(_ => RefreshPeripherals());
+        OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
 
         LoadWhitelistFromDisk();
         ScanGames();
@@ -55,6 +57,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool SamplerReady { get; }
     public string SamplerStatus { get; }
     public string HostSummary => $"{Environment.MachineName} · {Environment.ProcessorCount} 线程";
+
+    /// <summary>
+    /// 权限状态：清单里已声明 requireAdministrator，双击即提权。
+    /// 但仍要检测——用户可能通过计划任务、非 UAC 路径启动，此时前面那句提示就不该出现。
+    /// </summary>
+    public bool IsElevated { get; } = ElevationStatus.IsCurrentProcessElevated();
 
     /// <summary>
     /// 显存预算：从 DXGI 读显卡真实容量——独显取专用显存，核显取专用 + 共享。
@@ -77,6 +85,118 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand ClearWhitelistCommand { get; }
     public RelayCommand ReloadWhitelistCommand { get; }
     public RelayCommand ScanPeripheralsCommand { get; }
+
+    /// <summary>首页内存仪表盘旁的「优化」按钮：触发 <see cref="MemoryCleanAction"/>。</summary>
+    public RelayCommand OptimizeMemoryCommand { get; }
+
+    // ---------- 首页「优化」内存：执行中 / 成功 / 失败三态 ----------
+
+    private bool _isMemoryCleaning;
+    /// <summary>执行中：按钮禁用，避免重复点击叠加两次遍历。</summary>
+    public bool IsMemoryCleaning
+    {
+        get => _isMemoryCleaning;
+        private set
+        {
+            _isMemoryCleaning = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(OptimizeButtonText));
+            OnPropertyChanged(nameof(OptimizeButtonHex));
+            OptimizeMemoryCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private string _memoryOptimizeStatus = "点击「优化」释放闲置内存";
+    /// <summary>状态行：执行中 / 已释放多少 / 失败原因，三态都写在这里。</summary>
+    public string MemoryOptimizeStatus
+    {
+        get => _memoryOptimizeStatus;
+        private set { _memoryOptimizeStatus = value; OnPropertyChanged(); }
+    }
+
+    private MemoryOptimizeState _memoryOptimizeState = MemoryOptimizeState.Idle;
+    public MemoryOptimizeState MemoryOptimizeState
+    {
+        get => _memoryOptimizeState;
+        private set
+        {
+            _memoryOptimizeState = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(MemoryOptimizeStatusHex));
+        }
+    }
+
+    /// <summary>状态行颜色：空闲灰、进行中蓝、成功绿、失败红。</summary>
+    public string MemoryOptimizeStatusHex => MemoryOptimizeState switch
+    {
+        MemoryOptimizeState.Running => "#FF4C8DFF",
+        MemoryOptimizeState.Succeeded => "#FF34C759",
+        MemoryOptimizeState.Failed => "#FFFF453A",
+        _ => "#FF5C5F66",
+    };
+
+    public string OptimizeButtonText => IsMemoryCleaning ? "优化中…" : "优化";
+
+    /// <summary>执行中把按钮压暗，成功后回到主色。颜色不写死在 XAML 触发器里。</summary>
+    public string OptimizeButtonHex => IsMemoryCleaning ? "#FF2A2C33" : "#FF4C8DFF";
+
+    /// <summary>权限不足时的常驻提示。有权限时为空字符串，界面不占位。</summary>
+    public string ElevationHint => IsElevated
+        ? ""
+        : "当前未以管理员身份运行，部分进程的内存无法释放。请退出后右键以管理员身份运行。";
+
+    /// <summary>
+    /// 执行一次内存清理。
+    ///
+    /// 在后台线程跑：遍历上百个进程 + 每个都做一次 P/Invoke，同步跑会把界面卡住，
+    /// 用户会以为「点了没反应」而重复点击。结果回到 UI 线程再更新绑定属性。
+    /// </summary>
+    private async void OptimizeMemory()
+    {
+        if (IsMemoryCleaning) return;
+
+        IsMemoryCleaning = true;
+        MemoryOptimizeState = MemoryOptimizeState.Running;
+        MemoryOptimizeStatus = "正在释放闲置内存…";
+
+        try
+        {
+            var report = await Task.Run(() =>
+            {
+                _memoryClean.Apply();
+                return _memoryClean.Report;
+            });
+
+            if (report is null)
+            {
+                // Apply 成功却没留下报告属于实现缺陷，如实报错而不是显示一个假的 0
+                MemoryOptimizeState = MemoryOptimizeState.Failed;
+                MemoryOptimizeStatus = "内存清理未返回结果，本次不作数。";
+                return;
+            }
+
+            MemoryOptimizeState = MemoryOptimizeState.Succeeded;
+            MemoryOptimizeStatus = MemoryReleaseText.DescribeResult(report);
+
+            // 状态行说完就刷新一次仪表盘，让用户立刻看到内存占用变化
+            Tick();
+        }
+        catch (MemoryCleanException ex)
+        {
+            // 失败必须可见且可行动：区分「需要提权」与「已提权但仍被拒」
+            MemoryOptimizeState = MemoryOptimizeState.Failed;
+            MemoryOptimizeStatus = $"优化失败：{ElevationStatus.DescribeMemoryCleanFailure(ex.Reason, IsElevated)}";
+        }
+        catch (Exception ex)
+        {
+            MemoryOptimizeState = MemoryOptimizeState.Failed;
+            MemoryOptimizeStatus = $"优化失败：{ex.Message}";
+        }
+        finally
+        {
+            IsMemoryCleaning = false;
+        }
+    }
 
     // ---------- 首页百分比仪表盘 ----------
 
@@ -471,6 +591,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // 不能只说「已开启」：必须让用户看到结束了几个进程。
         var killed = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
         var detail = killed is null ? "" : $"；{killed.Summary}";
+
+        // 可选动作（内存清理等）没生效时同样要说出来：
+        // 静默跳过会让用户以为那一项做了，属于本项目明确禁止的「假成功」。
+        if (_gameMode.Warnings.Count > 0)
+            detail += "；" + string.Join("；", _gameMode.Warnings);
+
         GameModeStatus = $"游戏模式：已开启{detail}；关闭时自动恢复这些进程";
     }
 
@@ -616,14 +742,38 @@ public sealed class WhitelistEntry(string name) : INotifyPropertyChanged
 }
 
 /// <summary>最小命令实现，避免为一个按钮引入 MVVM 框架。</summary>
-public sealed class RelayCommand(Action<object?> execute) : System.Windows.Input.ICommand
+public sealed class RelayCommand : System.Windows.Input.ICommand
 {
-    public event EventHandler? CanExecuteChanged
+    private readonly Func<object?, bool>? _canExecute;
+    private readonly Action<object?> _execute;
+
+    public RelayCommand(Action<object?> execute, Func<object?, bool>? canExecute = null)
     {
-        add { }
-        remove { }
+        _execute = execute;
+        _canExecute = canExecute;
     }
 
-    public bool CanExecute(object? parameter) => true;
-    public void Execute(object? parameter) => execute(parameter);
+    public event EventHandler? CanExecuteChanged;
+
+    /// <summary>由 ViewModel 在状态变化时触发（如「优化中」禁用按钮）。</summary>
+    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+
+    public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
+    public void Execute(object? parameter) => _execute(parameter);
+}
+
+/// <summary>内存优化按钮的三态。</summary>
+public enum MemoryOptimizeState
+{
+    /// <summary>还没点过。</summary>
+    Idle = 0,
+
+    /// <summary>正在执行。</summary>
+    Running = 1,
+
+    /// <summary>成功（哪怕释放量很小，只要经过回读验证）。</summary>
+    Succeeded = 2,
+
+    /// <summary>失败。失败原因写在状态行里，不让用户猜。</summary>
+    Failed = 3,
 }

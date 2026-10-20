@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="GameOptimizer.App"/>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <!--
+          v2.0.0：双击即请求管理员权限。
+
+          为什么必须提权：释放其他进程的工作集需要对该进程持有 PROCESS_SET_QUOTA，
+          普通权限只能动本账户、同样未提权的进程；电源计划（powercfg /setactive）
+          与 v2.1 的 TcpAckFrequency / DNS 切换同样需要管理员。
+          不提权就会出现「界面说已优化、实际全被拒绝访问」的静默失败。
+
+          asInvoker 是旧行为；改成 requireAdministrator 后启动时 UAC 会直接弹窗。
+        -->
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <!-- Win10 / Win11：缺失时部分 WDDM 与 HID 接口会走兼容层 -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+
+  <!--
+    高 DPI 不写在这里：本项目开了 UseWindowsForms（托盘图标），
+    在清单里写 dpiAware 会触发 WFAC010 警告；WPF 在 .NET 8 默认就是 PerMonitorV2，
+    交给框架处理即可。
+  -->
+</assembly>

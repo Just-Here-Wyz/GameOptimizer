@@ -61,4 +61,26 @@ public static class SystemMemoryInfo
             return 0;
         }
     }
+
+    /// <summary>
+    /// 当前可用物理内存（字节）。读不到返回 0。
+    ///
+    /// 内存清理必须用它做前后对比：这是「系统还剩多少能用的物理内存」，
+    /// 与逐进程工作集是两个不同口径，混用会把并发波动算成自己的功劳。
+    /// </summary>
+    public static long AvailablePhysicalBytes
+    {
+        get
+        {
+            try
+            {
+                var stat = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+                return GlobalMemoryStatusEx(ref stat) ? (long)stat.ullAvailPhys : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+    }
 }

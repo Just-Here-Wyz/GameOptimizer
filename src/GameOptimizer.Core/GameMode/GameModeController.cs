@@ -505,12 +505,20 @@ public sealed class GameModeController
 {
     private readonly List<IGameModeAction> _actions = [];
     private readonly List<IGameModeAction> _applied = [];
+    private readonly HashSet<IGameModeAction> _optional = [];
     private readonly GameModeStateStore? _stateStore;
     private bool _stateSaved;
 
     public bool IsActive { get; private set; }
     public IReadOnlyList<IGameModeAction> Actions => _actions;
     public IReadOnlyList<IGameModeAction> Applied => _applied;
+
+    /// <summary>
+    /// 可选动作失败时的说明。它们不会中断游戏模式，但也不能沉默——
+    /// 界面必须展示，否则用户会以为那一项生效了。
+    /// </summary>
+    public IReadOnlyList<string> Warnings => _warnings;
+    private readonly List<string> _warnings = [];
 
     /// <summary>本次开启时的力度，供界面展示。</summary>
     public GameModeStrength Strength { get; private set; } = BackgroundProcessWhitelist.DefaultStrength;
@@ -522,6 +530,24 @@ public sealed class GameModeController
     public GameModeController(GameModeStateStore? stateStore = null) => _stateStore = stateStore;
 
     public void Add(IGameModeAction action) => _actions.Add(action);
+
+    /// <summary>
+    /// 注册「尽力而为」的动作：它失败时不回滚整个游戏模式，但失败原因照样进入
+    /// <see cref="Warnings"/> 上报界面。
+    ///
+    /// 为什么需要它：<see cref="MemoryCleanAction"/> 这类动作属于「锦上添花」，
+    /// 在受限令牌下可能整体被拒（全部进程 AccessDenied）。若按必需动作处理，
+    /// 用户会连电源计划都开不起来——一项可选的收益不该挡住整个游戏模式。
+    /// v2.1 的网络参数、CPU 亲和性同属这类：多一处平台差异就可能整体失败。
+    /// </summary>
+    public void AddOptional(IGameModeAction action)
+    {
+        _actions.Add(action);
+        _optional.Add(action);
+    }
+
+    /// <summary>这个动作失败是否会中断游戏模式。</summary>
+    public bool IsOptional(IGameModeAction action) => _optional.Contains(action);
 
     /// <summary>换掉某个类型的动作（例如按力度重建结束进程动作）。</summary>
     public void Replace<T>(IGameModeAction replacement) where T : IGameModeAction
@@ -544,6 +570,8 @@ public sealed class GameModeController
     public IReadOnlyList<string> Enter()
     {
         var errors = new List<string>();
+        _warnings.Clear();
+
         foreach (var a in _actions)
         {
             try
@@ -553,6 +581,13 @@ public sealed class GameModeController
             }
             catch (Exception ex)
             {
+                // 可选动作失败不拦路，但必须留下可见记录
+                if (_optional.Contains(a))
+                {
+                    _warnings.Add($"{a.Name} 未生效：{ex.Message}");
+                    continue;
+                }
+
                 errors.Add($"{a.Name} 失败：{ex.Message}");
                 Exit(); // 失败即回滚，不留下半套状态
                 return errors;
