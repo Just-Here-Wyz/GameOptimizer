@@ -29,9 +29,13 @@ public sealed class PowerPlanAction : IGameModeAction
     public string Name => "高性能电源计划";
     public string Description => "把电源计划切到高性能，避免 CPU/GPU 降频。";
 
+    /// <summary>进入游戏模式前的电源计划 GUID，供崩溃兜底快照使用。</summary>
+    public string? PreviousGuid => _previousGuid;
+
     public void Apply()
     {
         _previousGuid = CurrentPlanGuid();
+        EnsurePreviousReadable(_previousGuid);
         RunPowerCfg($"/setactive {HighPerformanceGuid}");
 
         // 关键：powercfg 失败时退出码并不总是可靠，必须回读确认真的切过去了，
@@ -41,13 +45,45 @@ public sealed class PowerPlanAction : IGameModeAction
                 $"电源计划切换未生效，当前仍为 {CurrentPlanGuid() ?? "未知"}。可能需要管理员权限。");
     }
 
+    /// <summary>回读不到原计划时不允许切换：没有可回滚的起点，失败会留下半套状态。</summary>
+    internal static void EnsurePreviousReadable(string? previous)
+    {
+        if (previous is null)
+            throw new InvalidOperationException("无法回读当前电源计划，不能保证可回滚，已取消切换。");
+    }
+
     public void Revert()
     {
         if (_previousGuid is null) return;
         RunPowerCfg($"/setactive {_previousGuid}");
 
-        if (!CurrentPlanGuid()?.Equals(_previousGuid, StringComparison.OrdinalIgnoreCase) == true)
-            throw new InvalidOperationException($"电源计划还原失败，原计划为 {_previousGuid}。");
+        // 回读失败必须可见：CurrentPlanGuid() 内部会吞掉异常返回 null，
+        // null?.Equals(...)==true 为 false 时不抛，用户会以为还原成功而实际没有。
+        EnsureReverted(CurrentPlanGuid(), _previousGuid);
+    }
+
+    /// <summary>还原后回读校验；任何失败都必须抛错，不能静默假装还原成功。</summary>
+    internal static void EnsureReverted(string? current, string previous)
+    {
+        if (current is null)
+            throw new InvalidOperationException($"无法回读当前电源计划，请手动确认是否已还原为 {previous}。");
+        if (!current.Equals(previous, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"电源计划还原失败，原计划为 {previous}。");
+    }
+
+    /// <summary>
+    /// 崩溃恢复用的电源计划还原：切回指定 GUID 并回读验证。
+    /// 成功返回 null；回读不到或没切过去时返回原因，绝不报虚假成功。
+    /// </summary>
+    public static string? RestorePlan(string guid)
+    {
+        RunPowerCfg($"/setactive {guid}");
+        var current = CurrentPlanGuid();
+        if (current is null)
+            return "无法回读当前电源计划，请手动确认";
+        return current.Equals(guid, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : $"切换未生效，当前仍为 {current}";
     }
 
     public bool IsActive() => CurrentPlanGuid()?.Equals(HighPerformanceGuid, StringComparison.OrdinalIgnoreCase) == true;
@@ -285,18 +321,23 @@ public sealed class EndProcessAction : IGameModeAction
                     // 硬猜一个同名命令可能拉起错误程序，如实告知比猜更诚实。
                     var launchPath = identity.ExecutablePath;
 
-                    p.Kill();
-                    p.WaitForExit(1000);
-
-                    // Kill 不抛异常也可能没真的结束，必须回读确认，
-                    // 否则会向用户报一次虚假的成功。
-                    if (!p.HasExited)
-                        _blocked.Add(new BlockedProcess(name, "进程仍在运行"));
-                    else
+                    // Chrome/WeChat/壁纸引擎这类大应用 1 秒内退不完，WaitForExit(1000)
+                    // 会把「还在退出中」误判成结束失败；放宽到 5 秒并补等一次。
+                    switch (TryKill(p))
                     {
-                        _killed.Add(new KilledProcess(name, mb));
-                        if (!string.IsNullOrWhiteSpace(launchPath))
-                            _restored.Add(new RestoredProcess(name, launchPath));
+                        case KillResult.Exited:
+                            _killed.Add(new KilledProcess(name, mb));
+                            if (!string.IsNullOrWhiteSpace(launchPath))
+                                _restored.Add(new RestoredProcess(name, launchPath));
+                            break;
+                        case KillResult.Stuck:
+                            // Kill 没抛异常但进程仍在运行：如实记录，不进 _restored——
+                            // 退出游戏模式时不该去拉起一个还活着的进程。
+                            _blocked.Add(new BlockedProcess(name, StuckReason));
+                            break;
+                        case KillResult.Denied:
+                            _blocked.Add(new BlockedProcess(name, "拒绝访问"));
+                            break;
                     }
                 }
                 catch (Exception ex)
@@ -306,6 +347,43 @@ public sealed class EndProcessAction : IGameModeAction
                 finally { p.Dispose(); }
             }
         }
+    }
+
+    /// <summary>结束一个进程的结果：已退出 / 超时仍运行 / 被拒绝访问。</summary>
+    internal enum KillResult
+    {
+        Exited,
+        Stuck,
+        Denied,
+    }
+
+    private const string StuckReason = "进程仍在运行";
+
+    /// <summary>
+    /// Kill 并回读确认结果。Kill 抛出的异常由调用方 catch 统一处理。
+    /// </summary>
+    internal static KillResult TryKill(Process p)
+    {
+        try
+        {
+            p.Kill();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // 只有这里才是真正的「拒绝访问」；Kill 的其余异常也归 Denied，
+            // 原因文本由调用方的 catch 记录。
+            return KillResult.Denied;
+        }
+        catch (InvalidOperationException) when (p.HasExited)
+        {
+            // 进程在我们动手前已经退出：目标状态达成，不算失败
+            return KillResult.Exited;
+        }
+
+        // 大应用退出慢，1 秒会误判；5 秒内真退出即为成功，再补等 500ms 仍未退
+        // 说明 Kill 没生效（例如被安全软件挂起），不得报成功。
+        if (p.WaitForExit(5000)) return KillResult.Exited;
+        return p.WaitForExit(500) ? KillResult.Exited : KillResult.Stuck;
     }
 
     private static string DescribeEssential(EssentialProcessGuard.ProcessIdentity identity)
@@ -369,8 +447,13 @@ public sealed class EndProcessAction : IGameModeAction
 
             if (_skipped.Count > 0)
                 text += $"（自动跳过 {_skipped.Count} 项系统必要进程）";
-            if (_blocked.Count > 0)
-                text += $"（{_blocked.Count} 项拒绝访问）";
+
+            var stuck = _blocked.Count(b => b.Reason == StuckReason);
+            var denied = _blocked.Count - stuck;
+            if (stuck > 0)
+                text += $"（{stuck} 项未完全退出）";
+            if (denied > 0)
+                text += $"（{denied} 项拒绝访问）";
 
             return text;
         }
@@ -422,6 +505,8 @@ public sealed class GameModeController
 {
     private readonly List<IGameModeAction> _actions = [];
     private readonly List<IGameModeAction> _applied = [];
+    private readonly GameModeStateStore? _stateStore;
+    private bool _stateSaved;
 
     public bool IsActive { get; private set; }
     public IReadOnlyList<IGameModeAction> Actions => _actions;
@@ -429,6 +514,12 @@ public sealed class GameModeController
 
     /// <summary>本次开启时的力度，供界面展示。</summary>
     public GameModeStrength Strength { get; private set; } = BackgroundProcessWhitelist.DefaultStrength;
+
+    /// <summary>
+    /// 创建总控。传入 stateStore 时开启崩溃兜底：
+    /// 进入成功落盘快照、干净退出清除快照；传 null 保持旧行为。
+    /// </summary>
+    public GameModeController(GameModeStateStore? stateStore = null) => _stateStore = stateStore;
 
     public void Add(IGameModeAction action) => _actions.Add(action);
 
@@ -467,8 +558,43 @@ public sealed class GameModeController
                 return errors;
             }
         }
+        // 兜底快照写不进去，崩溃后就没有任何恢复依据——视为开启失败，回滚全部改动
+        try
+        {
+            SaveStateSnapshot();
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"兜底状态写入失败：{ex.Message}");
+            Exit();
+            return errors;
+        }
         IsActive = true;
         return errors;
+    }
+
+    /// <summary>进入成功后落盘兜底快照。</summary>
+    private void SaveStateSnapshot()
+    {
+        if (_stateStore is null) return;
+        _stateStore.Save(BuildSnapshot());
+        _stateSaved = true;
+    }
+
+    /// <summary>用当前动作状态组装快照：原电源计划 + 被结束进程的恢复入口。</summary>
+    private GameModeSnapshot BuildSnapshot()
+    {
+        var snapshot = new GameModeSnapshot();
+        var power = _applied.OfType<PowerPlanAction>().FirstOrDefault();
+        if (power is not null) snapshot.PreviousPowerPlanGuid = power.PreviousGuid;
+        var killer = _applied.OfType<EndProcessAction>().FirstOrDefault();
+        if (killer is not null)
+        {
+            snapshot.Killed = killer.Restored
+                .Select(r => new GameModeKilledProcess { Name = r.Name, LaunchPath = r.LaunchPath })
+                .ToList();
+        }
+        return snapshot;
     }
 
     public void Exit() => ExitWithReport();
@@ -487,6 +613,23 @@ public sealed class GameModeController
         }
         _applied.Clear();
         IsActive = false;
+
+        // 有还原失败就保留快照：下次启动继续提示用户处理
+        if (errors.Count == 0 && _stateSaved) ClearStateSnapshot();
         return errors;
+    }
+
+    /// <summary>干净退出后清除兜底快照；清除失败保留快照（下次启动提示，好过无声丢档）。</summary>
+    private void ClearStateSnapshot()
+    {
+        if (_stateStore is null) return;
+        try
+        {
+            _stateStore.Clear();
+        }
+        catch
+        {
+            // 清除失败时快照仍在，下次启动会提示用户确认，不静默
+        }
     }
 }

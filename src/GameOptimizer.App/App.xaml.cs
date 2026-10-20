@@ -25,6 +25,8 @@ public partial class App : Application
         // 因此不能用 OnMainWindowClose——主窗口一关进程就没了。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+        RecoverFromAbnormalExit();
+
         _sampler = new PdhSampler();
         var ready = _sampler.Initialize();
         if (ready) _sampler.Warmup();
@@ -38,6 +40,63 @@ public partial class App : Application
         _window.Show();
 
         CreateTrayIcon();
+    }
+
+    /// <summary>
+    /// 崩溃 / 任务管理器强杀后的兜底：检测残留快照并询问是否还原。
+    /// 选「否」保留快照，下次启动再问，直到用户处理掉。
+    /// </summary>
+    private void RecoverFromAbnormalExit()
+    {
+        GameModeStateStore store;
+        GameModeSnapshot? snapshot;
+        try
+        {
+            store = new GameModeStateStore();
+            snapshot = store.Load();
+            if (snapshot is null) return;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"上次运行残留的游戏模式状态无法读取，请手动确认电源计划：\n{ex.Message}",
+                "游戏优化助手 — 残留状态",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var planMention = string.IsNullOrWhiteSpace(snapshot.PreviousPowerPlanGuid)
+            ? ""
+            : "电源计划";
+        var count = snapshot.Killed?.Count(k => !string.IsNullOrWhiteSpace(k.LaunchPath)) ?? 0;
+        var items = new List<string>();
+        if (planMention.Length > 0) items.Add(planMention);
+        if (count > 0) items.Add($"{count} 个进程");
+        var what = items.Count > 0 ? string.Join("和", items) : "上次的改动";
+
+        var answer = MessageBox.Show(
+            $"上次程序未正常退出，检测到 {what} 未还原，是否现在还原？",
+            "游戏优化助手 — 恢复",
+            MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return; // 保留快照，下次启动再问
+
+        // 还原：电源计划走与 PowerPlanAction 相同的 powercfg 通道（含回读验证），
+        // 进程用 GameModeRecovery 按原路径拉起，失败项必须逐条展示。
+        var errors = new GameModeRecovery().Restore(
+            snapshot,
+            PowerPlanAction.RestorePlan);
+
+        if (errors.Count > 0)
+        {
+            // 还原没做完：保留快照，下次启动继续问
+            MessageBox.Show(
+                "还原未完成，请手动确认：\n" + string.Join("\n", errors),
+                "游戏优化助手 — 还原未完成",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        store.Clear();
     }
 
     /// <summary>
@@ -152,7 +211,7 @@ public partial class App : Application
     /// </summary>
     private static GameModeController BuildGameMode()
     {
-        var mode = new GameModeController();
+        var mode = new GameModeController(new GameModeStateStore());
         mode.Add(new PowerPlanAction());
         mode.Add(new EndProcessAction(BackgroundProcessWhitelist.Default));
         return mode;
