@@ -212,6 +212,32 @@ public class PeripheralAnalyzerTests
     }
 
     [Fact]
+    public void 笔记本自带键盘不应出现在外设列表()
+    {
+        // 用户要求（v1.0.1）：外设页不显示笔记本自带键盘。
+        // 板载 PS/2 键盘父设备是 ACPI，外接键盘挂在 USB / BTHENUM 下不受影响。
+        var devices = PeripheralAnalyzer.Build(RealMachineNodes());
+
+        var keyboards = devices.Where(d => d.Kind == PeripheralKind.Keyboard).ToList();
+        keyboards.Should().NotContain(d => d.Model.Contains("PS/2", StringComparison.OrdinalIgnoreCase));
+        keyboards.Should().NotContain(d => d.Model.Contains("标准键盘", StringComparison.Ordinal));
+        // 外接的罗技 G610 必须还在
+        keyboards.Should().Contain(d => d.Model == "G610");
+    }
+
+    [Fact]
+    public void 外接USB键盘不应被误判为笔记本自带键盘()
+    {
+        // USB 键盘的父设备是 USB\...，不满足「父设备是 ACPI」的内置判据
+        var node = Node(@"HID\VID_046D&PID_C338&MI_01&COL01\7&1C2F338D&0&0000", "Keyboard",
+            hidProduct: "Gaming Keyboard G610", manufacturer: "Logitech",
+            parent: @"USB\VID_046D&PID_C338&MI_01\6&3758ce25&0&0001",
+            container: Guid.Parse("838be7a9-3545-52ad-a3df-372364c4f4a3"));
+
+        PeripheralAnalyzer.IsBuiltInKeyboard(node).Should().BeFalse();
+    }
+
+    [Fact]
     public void 空设备树不应抛异常()
         => PeripheralAnalyzer.Build([]).Should().BeEmpty();
 

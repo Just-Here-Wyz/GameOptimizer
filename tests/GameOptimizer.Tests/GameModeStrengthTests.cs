@@ -185,6 +185,10 @@ public class GameModeStrengthTests
 
             action.Killed.Should().NotBeEmpty("临时目录下的进程不属于系统组件");
             action.Summary.Should().MatchRegex(@"已结束 \d+ 个进程，释放约 \d+ MB");
+
+            // v1.0.1：退出时恢复被结束的进程（该副本是可执行文件，应被重新拉起）
+            action.Revert();
+            action.RestoredCount.Should().BeGreaterThanOrEqualTo(0);
         }
         finally
         {

@@ -72,7 +72,8 @@ public class SteamLibraryScannerTests
             var entry = SteamLibraryScanner.ParseManifest(acf, dir);
 
             entry.Should().NotBeNull();
-            entry!.Name.Should().Be("NARAKA: BLADEPOINT");
+            // v1.0.1：NARAKA 显示名映射为「永劫无间」
+            entry!.Name.Should().Be("永劫无间");
             entry.AppId.Should().Be("1203220");
             entry.SizeOnDiskGb.Should().BeApproximately(92.45, 0.1);
         }

@@ -65,6 +65,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// 左侧窄导航切换。用 Visibility 而不是 TabControl：
     /// 顶部标题栏与页内页头要长期可见，TabControl 会把它们一起装进页签里。
+    /// v1.0.1 起右上角页签已删除，这里是唯一的页面切换入口。
     /// </summary>
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -74,18 +75,6 @@ public partial class MainWindow : Window
         if (index < 0) return;
 
         ShowPage(index);
-
-        // 顶部页签与左侧导航保持一致，不在两者之间制造两套状态
-        TabHome.IsChecked = index == 0;
-        TabPeripherals.IsChecked = index == 1;
-    }
-
-    private void Tab_Checked(object sender, RoutedEventArgs e)
-    {
-        if (HomePage is null || PeripheralPage is null) return;
-
-        var index = ReferenceEquals(sender, TabPeripherals) ? 1 : 0;
-        NavList.SelectedIndex = index;
     }
 
     private void ShowPage(int index)

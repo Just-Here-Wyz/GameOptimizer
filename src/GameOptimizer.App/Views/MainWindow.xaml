@@ -24,6 +24,9 @@
     </shell:WindowChrome.WindowChrome>
 
     <Window.Resources>
+        <!-- bool → 可见性；null → 收起（图标兜底用） -->
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <views:NullToCollapsedInverseConverter x:Key="NullToCollapsedInverse"/>
         <!--
           左侧导航项：参考图没有左侧大栏，但工具本身靠它切页。
           这里把它压窄（72px）、去掉卡片感，做成图标 + 文字的紧凑竖排，
@@ -57,31 +60,6 @@
             </Setter>
         </Style>
 
-        <!-- 顶部导航按钮（参考图的 电量 / 设备清单 / 设置 三连） -->
-        <Style x:Key="TopTab" TargetType="RadioButton">
-            <Setter Property="Foreground" Value="#FF83868D"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="12,6">
-                            <ContentPresenter/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#FF1F2127"/>
-                                <Setter Property="Foreground" Value="#FFECEDEF"/>
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#FF2A2C33"/>
-                                <Setter Property="Foreground" Value="#FFECEDEF"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
     </Window.Resources>
 
     <!-- 1px 自绘描边：参考图四周有一圈极淡的轮廓，替代系统白框 -->
@@ -111,17 +89,8 @@
                 <TextBlock Grid.Column="1" Text="游戏优化助手" FontSize="13" FontWeight="SemiBold"
                            VerticalAlignment="Center" Foreground="#FFECEDEF"/>
 
-                <!-- 顶部页签：三连按钮，居中偏左。
-                     WindowChrome 会把整条标题栏当作拖动区，控件必须显式声明可点击，
-                     否则点「外设」只会拖窗口，页签像坏了一样 -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                            VerticalAlignment="Center" Margin="0,0,12,0"
-                            WindowChrome.IsHitTestVisibleInChrome="True">
-                    <RadioButton x:Name="TabHome" Content="总览" Style="{StaticResource TopTab}"
-                                 IsChecked="True" GroupName="Pages" Checked="Tab_Checked"/>
-                    <RadioButton x:Name="TabPeripherals" Content="外设" Style="{StaticResource TopTab}"
-                                 GroupName="Pages" Checked="Tab_Checked" Margin="4,0,0,0"/>
-                </StackPanel>
+                <!-- 顶部页签已移除（v1.0.1）：页面切换只保留左侧导航，
+                     避免「左侧 + 右上角」两套切换入口重复 -->
 
                 <!-- 窗口按钮：最小化 / 最大化 / 关闭（无系统白框） -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top">
@@ -258,20 +227,27 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <TextBlock Text="游戏模式" FontSize="14" FontWeight="SemiBold"/>
                                             <TextBlock Text="{Binding GameModeStatus}" Style="{StaticResource Muted}"
                                                        TextWrapping="Wrap" Margin="0,4,16,0"/>
                                         </StackPanel>
-                                        <Button Grid.Column="1" Content="{Binding GameModeButtonText}"
+                                        <Button Grid.Column="1" Content="{Binding WhitelistPanelButtonText}"
+                                                Command="{Binding ToggleWhitelistPanelCommand}"
+                                                Margin="0,0,10,0" VerticalAlignment="Center"
+                                                ToolTip="选择开启游戏模式时要结束的后台应用"/>
+                                        <Button Grid.Column="2" Content="{Binding GameModeButtonText}"
                                                 Command="{Binding ToggleGameModeCommand}"
+                                                Background="{Binding GameModeButtonHex}"
                                                 Style="{StaticResource PrimaryButton}" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
 
-                                <!-- 后台白名单 -->
-                                <Border Style="{StaticResource Card}">
+                                <!-- 后台白名单：v1.0.1 起折叠为「白名单设置」按钮展开的面板 -->
+                                <Border Style="{StaticResource Card}"
+                                        Visibility="{Binding IsWhitelistPanelOpen, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -303,12 +279,32 @@
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <StackPanel Margin="0,5,20,5" MinWidth="150">
-                                                        <CheckBox Content="{Binding DisplayName}"
-                                                                  IsChecked="{Binding Enabled, Mode=TwoWay}"/>
-                                                        <TextBlock Text="{Binding NameHint}" Style="{StaticResource Faint}"
-                                                                   Margin="21,0,0,0"/>
-                                                    </StackPanel>
+                                                    <Grid Margin="0,5,20,5" MinWidth="170">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Grid.Column="0" Width="26" Height="26" CornerRadius="6"
+                                                                Background="#FF25272E" VerticalAlignment="Center">
+                                                            <Grid>
+                                                                <Image Source="{Binding Icon}" Width="18" Height="18"
+                                                                       HorizontalAlignment="Center"
+                                                                       VerticalAlignment="Center"/>
+                                                                <TextBlock Text="{Binding IconFallbackText}"
+                                                                           Style="{StaticResource Faint}" FontSize="12"
+                                                                           HorizontalAlignment="Center"
+                                                                           VerticalAlignment="Center"
+                                                                           Visibility="{Binding Icon, Converter={StaticResource NullToCollapsedInverse}}"/>
+                                                            </Grid>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" Margin="8,0,0,0"
+                                                                    VerticalAlignment="Center">
+                                                            <CheckBox Content="{Binding DisplayName}"
+                                                                      IsChecked="{Binding Enabled, Mode=TwoWay}"/>
+                                                            <TextBlock Text="{Binding NameHint}" Style="{StaticResource Faint}"
+                                                                       Margin="21,0,0,0"/>
+                                                        </StackPanel>
+                                                    </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>

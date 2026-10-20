@@ -221,16 +221,20 @@ public sealed class EndProcessAction : IGameModeAction
     private readonly List<KilledProcess> _killed = [];
     private readonly List<BlockedProcess> _blocked = [];
     private readonly List<BlockedProcess> _skipped = [];
+    private readonly List<RestoredProcess> _restored = [];
     private IReadOnlySet<string>? _serviceNames;
 
     public IReadOnlyList<string> Whitelist { get; }
     public string Name => "关闭后台干扰进程";
-    public string Description => "结束白名单内的浏览器、壁纸引擎、管家遥测等；不会自动重启，需你手动打开。";
+    public string Description => "结束白名单内的浏览器、壁纸引擎、管家遥测等；关闭游戏模式时自动恢复。";
 
     public EndProcessAction(IReadOnlyList<string> whitelist) => Whitelist = whitelist;
 
     /// <summary>本动作实际结束掉的进程。</summary>
     public IReadOnlyList<KilledProcess> Killed => _killed;
+
+    /// <summary>退出时自动恢复的进程（进程名 + 启动命令）。</summary>
+    public IReadOnlyList<RestoredProcess> Restored => _restored;
 
     /// <summary>
     /// 被判定为系统必要、主动跳过的进程。
@@ -247,6 +251,7 @@ public sealed class EndProcessAction : IGameModeAction
         _killed.Clear();
         _blocked.Clear();
         _skipped.Clear();
+        _restored.Clear();
 
         _serviceNames ??= EssentialProcessGuard.LoadServiceImageNames();
 
@@ -275,6 +280,11 @@ public sealed class EndProcessAction : IGameModeAction
                     var mb = 0.0;
                     try { mb = p.WorkingSet64 / (1024.0 * 1024.0); } catch { }
 
+                    // 结束前先记下可执行文件路径，退出游戏模式时按它恢复。
+                    // 读不到路径的进程不自动恢复——没有可靠的启动入口，
+                    // 硬猜一个同名命令可能拉起错误程序，如实告知比猜更诚实。
+                    var launchPath = identity.ExecutablePath;
+
                     p.Kill();
                     p.WaitForExit(1000);
 
@@ -283,7 +293,11 @@ public sealed class EndProcessAction : IGameModeAction
                     if (!p.HasExited)
                         _blocked.Add(new BlockedProcess(name, "进程仍在运行"));
                     else
+                    {
                         _killed.Add(new KilledProcess(name, mb));
+                        if (!string.IsNullOrWhiteSpace(launchPath))
+                            _restored.Add(new RestoredProcess(name, launchPath));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -304,8 +318,39 @@ public sealed class EndProcessAction : IGameModeAction
         return "系统必要进程";
     }
 
-    /// <summary>被结束的进程无法自动恢复，这里只做记录清理。</summary>
-    public void Revert() => _killed.Clear();
+    /// <summary>
+    /// 退出游戏模式：恢复所有被结束、且可执行文件路径已知的进程。
+    /// 恢复失败的进程会被保留在上报列表里，绝不静默假装恢复了。
+    /// </summary>
+    public void Revert()
+    {
+        foreach (var r in _restored)
+        {
+            if (r.Launched) continue;
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(r.LaunchPath) { UseShellExecute = true });
+                r.MarkLaunched();
+            }
+            catch (Exception ex)
+            {
+                r.MarkFailed(ex.Message);
+            }
+        }
+
+        // 已恢复 / 恢复失败的处理完毕，清掉「已结束」状态；
+        // _restored 保留到下次 Apply 重置，供界面查询恢复结果
+        // （Revert 不重复启动：每个记录带 Launched 标记）
+        _killed.Clear();
+    }
+
+    /// <summary>退出游戏模式后没能恢复的进程，界面必须告诉用户。</summary>
+    public IReadOnlyList<RestoredProcess> FailedRestores
+        => _restored.Where(r => r.Failed).ToList();
+
+    /// <summary>退出游戏模式后成功恢复的进程数。</summary>
+    public int RestoredCount => _restored.Count(r => r.Launched && !r.Failed);
 
     /// <summary>只有真的结束过进程才算生效，否则界面会显示「已开启」而实际没做任何事。</summary>
     public bool IsActive() => _killed.Count > 0;
@@ -334,6 +379,40 @@ public sealed class EndProcessAction : IGameModeAction
 
 /// <summary>一个被结束的进程，记录名字与占用，便于事后说明。</summary>
 public sealed record KilledProcess(string Name, double WorkingSetMb);
+
+/// <summary>
+/// 一个在退出游戏模式时要恢复的进程。
+/// 只有拿到可执行文件路径的才会创建——恢复必须按原路径拉起，
+/// 路径读不到的进程如实告知「未恢复」，不靠猜命令。
+/// </summary>
+public sealed class RestoredProcess
+{
+    public RestoredProcess(string name, string launchPath)
+    {
+        Name = name;
+        LaunchPath = launchPath;
+    }
+
+    public string Name { get; }
+
+    /// <summary>被结束进程的可执行文件完整路径，恢复时用它拉起。</summary>
+    public string LaunchPath { get; }
+
+    /// <summary>恢复已执行（成功或失败都算执行过，避免重复启动）。</summary>
+    public bool Launched { get; private set; }
+
+    public bool Failed => !string.IsNullOrEmpty(Error);
+
+    public string? Error { get; private set; }
+
+    internal void MarkLaunched() => Launched = true;
+
+    internal void MarkFailed(string error)
+    {
+        Launched = true;
+        Error = error;
+    }
+}
 
 /// <summary>结束失败且原因不是「进程不存在」的项。服务进程会拒绝结束。</summary>
 public sealed record BlockedProcess(string Name, string Reason);

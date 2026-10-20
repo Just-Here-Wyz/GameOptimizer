@@ -34,14 +34,57 @@ public sealed class SteamLibraryScanner : IGameLibraryScanner
             var appsDir = Path.Combine(lib, "steamapps");
             if (!Directory.Exists(appsDir)) continue;
 
+            // manifest 路径 → GameEntry，用于兜底扫描时判断目录是否已被清单收录
+            var byInstallPath = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var acf in Directory.EnumerateFiles(appsDir, "appmanifest_*.acf"))
             {
                 var entry = ParseManifest(acf, lib);
-                if (entry is not null) results.Add(entry);
+                if (entry is null) continue;
+                byInstallPath.Add(NormalizePath(entry.InstallPath));
+                results.Add(entry);
+            }
+
+            // 兜底扫描（借鉴原工具做法）：steamapps\common 下没有 appmanifest 的
+            // 游戏目录同样入库——实测 ChainedTogether 移库后只剩目录没有 acf，
+            // 只靠清单会漏掉它。
+            var commonDir = Path.Combine(appsDir, "common");
+            if (!Directory.Exists(commonDir)) continue;
+
+            foreach (var dir in Directory.EnumerateDirectories(commonDir))
+            {
+                if (byInstallPath.Contains(NormalizePath(dir))) continue;
+
+                var dirName = Path.GetFileName(dir);
+                // 依赖库等非游戏目录
+                if (NonGameFilter.IsNonGameDirectoryName(dirName)) continue;
+
+                var entry = new GameEntry(
+                    Name: SteamDisplayNames.Resolve("", dirName),
+                    AppId: "",
+                    InstallPath: dir,
+                    ExecutablePath: FindMainExecutable(dir),
+                    SizeOnDiskGb: Math.Round(DirectorySizeGb(dir), 2),
+                    Source: "Steam");
+                results.Add(entry);
             }
         }
 
         return results.OrderByDescending(g => g.SizeOnDiskGb).ToList();
+    }
+
+    private static double DirectorySizeGb(string path)
+    {
+        try
+        {
+            long total = 0;
+            foreach (var f in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            {
+                try { total += new FileInfo(f).Length; } catch { }
+            }
+            return total / 1024.0 / 1024.0 / 1024.0;
+        }
+        catch { return 0; }
     }
 
     /// <summary>
@@ -86,7 +129,7 @@ public sealed class SteamLibraryScanner : IGameLibraryScanner
 
         var fullPath = Path.Combine(libraryRoot, "steamapps", "common", dir);
         return new GameEntry(
-            Name: name,
+            Name: SteamDisplayNames.Resolve(appId, name),
             AppId: appId,
             InstallPath: fullPath,
             ExecutablePath: FindMainExecutable(fullPath),

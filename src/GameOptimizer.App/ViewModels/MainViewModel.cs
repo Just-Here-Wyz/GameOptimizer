@@ -34,6 +34,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ScanGamesCommand = new RelayCommand(_ => { ScanGames(); RefreshAllGameStatus(); });
         ToggleGameModeCommand = new RelayCommand(_ => ToggleGameMode());
+        ToggleWhitelistPanelCommand = new RelayCommand(_ => IsWhitelistPanelOpen = !IsWhitelistPanelOpen);
         SelectAllWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(true));
         ClearWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(false));
         ReloadWhitelistCommand = new RelayCommand(_ => LoadWhitelistFromDisk());
@@ -71,6 +72,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public RelayCommand ScanGamesCommand { get; }
     public RelayCommand ToggleGameModeCommand { get; }
+    public RelayCommand ToggleWhitelistPanelCommand { get; }
     public RelayCommand SelectAllWhitelistCommand { get; }
     public RelayCommand ClearWhitelistCommand { get; }
     public RelayCommand ReloadWhitelistCommand { get; }
@@ -152,10 +154,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsGameModeOn
     {
         get => _isGameModeOn;
-        private set { _isGameModeOn = value; OnPropertyChanged(); OnPropertyChanged(nameof(GameModeButtonText)); }
+        private set
+        {
+            _isGameModeOn = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(GameModeButtonText));
+            OnPropertyChanged(nameof(GameModeButtonHex));
+        }
     }
 
-    public string GameModeButtonText => IsGameModeOn ? "退出游戏模式" : "开启游戏模式";
+    public string GameModeButtonText => IsGameModeOn ? "关闭游戏模式" : "开启游戏模式";
+
+    /// <summary>开启后按钮变红色（用户要求），关闭态恢复蓝色主按钮色。</summary>
+    public string GameModeButtonHex => IsGameModeOn ? "#FFFF453A" : "#FF4C8DFF";
+
+    /// <summary>白名单设置面板的展开状态。</summary>
+    private bool _isWhitelistPanelOpen;
+    public bool IsWhitelistPanelOpen
+    {
+        get => _isWhitelistPanelOpen;
+        private set
+        {
+            _isWhitelistPanelOpen = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(WhitelistPanelButtonText));
+        }
+    }
+
+    /// <summary>白名单设置按钮的文案：展开时提示收起。</summary>
+    public string WhitelistPanelButtonText => IsWhitelistPanelOpen ? "收起白名单" : "白名单设置";
 
     // ---------- 外设页 ----------
 
@@ -403,11 +430,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (IsGameModeOn)
         {
-            var errors = _gameMode.ExitWithReport();
+            var errors = _gameMode.ExitWithReport().ToList();
             IsGameModeOn = false;
-            GameModeStatus = errors.Count == 0
-                ? "游戏模式：已关闭，改动已还原"
-                : "⚠ 游戏模式已关闭，但有项未还原：" + string.Join("；", errors);
+
+            // 关闭时按原路径恢复被结束的进程（用户要求），结果必须如实上报
+            var restored = 0;
+            var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
+            if (action is not null)
+            {
+                restored = action.RestoredCount;
+                errors.AddRange(action.FailedRestores.Select(r =>
+                    $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
+            }
+
+            if (errors.Count == 0)
+            {
+                GameModeStatus = restored > 0
+                    ? $"游戏模式：已关闭，已恢复 {restored} 个进程"
+                    : "游戏模式：已关闭，改动已还原";
+            }
+            else
+            {
+                GameModeStatus = "⚠ 游戏模式已关闭，但有项未还原：" + string.Join("；", errors);
+            }
             return;
         }
 
@@ -426,7 +471,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // 不能只说「已开启」：必须让用户看到结束了几个进程。
         var killed = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
         var detail = killed is null ? "" : $"；{killed.Summary}";
-        GameModeStatus = $"游戏模式：已开启{detail}；关闭时进程需手动重开";
+        GameModeStatus = $"游戏模式：已开启{detail}；关闭时自动恢复这些进程";
     }
 
     /// <summary>停止采集。关窗口时调用，保证游戏模式一定被还原。</summary>
@@ -436,7 +481,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (_gameMode.IsActive)
         {
-            var errors = _gameMode.ExitWithReport();
+            // 退出时同样触发进程恢复；失败与恢复数量如实写入状态行
+            var errors = _gameMode.ExitWithReport().ToList();
+            var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
+            if (action is not null)
+            {
+                errors.AddRange(action.FailedRestores.Select(r =>
+                    $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
+            }
+
             if (errors.Count > 0)
                 GameModeStatus = "⚠ 还原未完成：" + string.Join("；", errors);
         }
@@ -540,6 +593,12 @@ public sealed class WhitelistEntry(string name) : INotifyPropertyChanged
 
     /// <summary>与进程名不同时才在界面附注，避免重复显示。</summary>
     public string NameHint { get; } = ProcessDisplayNames.HasName(name) ? name : "";
+
+    /// <summary>应用图标（来自进程可执行文件）；提取失败时为 null，界面显示首字符色块。</summary>
+    public System.Windows.Media.ImageSource? Icon => AppIconCache.For(name);
+
+    /// <summary>首字符色块兜底：显示名第一个字符（或进程名首字符）。</summary>
+    public string IconFallbackText => (DisplayName.Length > 0 ? DisplayName[0] : '?').ToString();
 
     private bool _enabled;
     public bool Enabled

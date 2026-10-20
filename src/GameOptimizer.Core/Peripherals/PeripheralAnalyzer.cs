@@ -65,6 +65,10 @@ public static class PeripheralAnalyzer
             var kind = PeripheralClassifier.FromHidHardwareIds(node.HardwareIds, node.ClassName);
             if (kind is not { } k) continue;
 
+            // 笔记本自带键盘（ACPI 下直连主板的 PS/2 / I2C 键盘）不展示，
+            // 外接键盘挂在 USB / BTHENUM 下不受影响
+            if (k == PeripheralKind.Keyboard && IsBuiltInKeyboard(node)) continue;
+
             var key = DeviceKey(node);
             if (!grouped.TryGetValue(key, out var list))
             {
@@ -206,6 +210,16 @@ public static class PeripheralAnalyzer
 
         return stable.Length > 0 ? stable : node.InstanceId.ToUpperInvariant();
     }
+
+    /// <summary>
+    /// 笔记本自带键盘：设备自身挂在 ACPI 树上（如 ACPI\MSFT0001 的 PS/2 键盘），
+    /// 或父设备在 ACPI 下。外接键盘实例 ID 是 HID\（USB）或 BTHENUM\（蓝牙），
+    /// 永远不会命中。
+    /// </summary>
+    internal static bool IsBuiltInKeyboard(PeripheralNode node)
+        => node.ClassName.Equals("Keyboard", StringComparison.OrdinalIgnoreCase)
+           && (node.InstanceId.StartsWith("ACPI\\", StringComparison.OrdinalIgnoreCase)
+               || (node.ParentInstanceId?.StartsWith("ACPI\\", StringComparison.OrdinalIgnoreCase) ?? false));
 
     /// <summary>
     /// 触摸板 / 触摸屏：Windows 把它们也归到 Mouse 类，必须排除。

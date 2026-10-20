@@ -52,7 +52,10 @@ public interface IGameLibraryScanner
 /// </summary>
 public static class NonGameFilter
 {
-    /// <summary>按名称精确/包含匹配的黑名单。</summary>
+    /// <summary>
+    /// 按名称精确/包含匹配的黑名单。
+    /// 兼用于 common 目录兜底扫描时的目录名过滤。
+    /// </summary>
     private static readonly string[] ByName =
     [
         "wallpaper engine",
@@ -66,6 +69,32 @@ public static class NonGameFilter
         "3dmark",
         "vrchat" // 社交应用，非游戏（如需保留可移除此行）
     ];
+
+    /// <summary>
+    /// common 目录兜底扫描时，按目录名剔除的已知非游戏。
+    /// 覆盖没有 appmanifest 的场景（Steamworks Shared 等）。
+    /// </summary>
+    private static readonly string[] ByDirectoryName =
+    [
+        "steamworks shared",
+        "steamworks common redistributables",
+        "wallpaper_engine",
+        "wallpaper engine",
+        "proton",
+    ];
+
+    /// <summary>目录名是否属于已知非游戏目录（供库兜底扫描用）。</summary>
+    public static bool IsNonGameDirectoryName(string directoryName)
+    {
+        if (string.IsNullOrWhiteSpace(directoryName)) return true;
+
+        foreach (var blocked in ByDirectoryName)
+        {
+            if (directoryName.Equals(blocked, StringComparison.OrdinalIgnoreCase)) return true;
+            if (directoryName.Contains(blocked, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
 
     /// <summary>按可执行文件名匹配的黑名单。</summary>
     private static readonly string[] ByExecutable =

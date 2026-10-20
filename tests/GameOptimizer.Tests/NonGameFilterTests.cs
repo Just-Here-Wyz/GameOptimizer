@@ -71,6 +71,17 @@ public class NonGameFilterTests
     {
         NonGameFilter.IsNonGame(Entry("  Wallpaper Engine  ")).Should().BeTrue();
     }
+
+    [Theory]
+    [InlineData("steamworks shared", true)]
+    [InlineData("wallpaper_engine", true)]
+    [InlineData("NARAKA BLADEPOINT", false)]
+    [InlineData("ChainedTogether", false)]
+    [InlineData("", true)]
+    public void 目录名兜底扫描应过滤已知非游戏目录(string directoryName, bool expected)
+    {
+        NonGameFilter.IsNonGameDirectoryName(directoryName).Should().Be(expected);
+    }
 }
 
 /// <summary>聚合扫描：多平台合并且去重。</summary>

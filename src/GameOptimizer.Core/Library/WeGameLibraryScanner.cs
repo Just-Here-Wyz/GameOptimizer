@@ -64,8 +64,24 @@ public sealed class WeGameLibraryScanner : IGameLibraryScanner
         foreach (var drive in DriveInfo.GetDrives())
         {
             if (drive.DriveType != DriveType.Fixed) continue;
+
+            // 1) 直接看 <盘>:\WeGameApps
             var guess = Path.Combine(drive.Name, "WeGameApps");
             if (Directory.Exists(guess)) roots.Add(guess);
+
+            // 2) 原工具实测：WeGameApps 可能被用户迁到别的名字下面（如 E:\WeGameApps），
+            //    上面一条已覆盖；再兜底扫盘根一级目录里名字含 WeGame 的目录
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(drive.Name))
+                {
+                    var dirName = Path.GetFileName(dir);
+                    if (dirName.Contains("WeGame", StringComparison.OrdinalIgnoreCase)
+                        && dirName.EndsWith("Apps", StringComparison.OrdinalIgnoreCase))
+                        roots.Add(dir);
+                }
+            }
+            catch { }
         }
 
         return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
