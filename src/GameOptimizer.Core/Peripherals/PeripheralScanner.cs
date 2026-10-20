@@ -39,8 +39,7 @@ public sealed class PeripheralScanner
 
             var devices = PeripheralAnalyzer.Build(nodes);
 
-            // 实时读取 VXE/ATK（Compx）鼠标电量（私有 HID 协议），
-            // 覆盖扫描快照里读不到的电量；失败保持原样显示「未知」
+            // VXE/ATK（Compx）鼠标私有协议实时电量，覆盖扫描快照读不到的电量
             try
             {
                 var vxeLevel = VxeBatterySource.ReadBatteryPercent();
