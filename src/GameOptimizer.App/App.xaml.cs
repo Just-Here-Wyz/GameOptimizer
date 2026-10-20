@@ -3,6 +3,7 @@ namespace GameOptimizer.App;
 using System.ComponentModel;
 using System.Drawing;
 using System.Windows;
+using System.Windows.Threading;
 using GameOptimizer.App.ViewModels;
 using GameOptimizer.App.Views;
 using GameOptimizer.Core.Collection;
@@ -17,6 +18,13 @@ public partial class App : Application
     private NotifyIcon? _tray;
     private bool _reallyExit;
 
+    // 游戏内悬浮窗
+    private OverlayWindow? _overlay;
+    private ToolStripMenuItem? _overlayItem;
+    private DispatcherTimer? _overlayPump;
+    private readonly OverlaySettingsStore _overlayStore = new();
+    private OverlaySettings _overlaySettings = new();
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -26,6 +34,8 @@ public partial class App : Application
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
         RecoverFromAbnormalExit();
+
+        _overlaySettings = _overlayStore.Load();
 
         _sampler = new PdhSampler();
         var ready = _sampler.Initialize();
@@ -114,13 +124,97 @@ public partial class App : Application
         };
 
         var menu = new ContextMenuStrip();
+
+        // 悬浮窗开关放在托盘：它是"游戏中用"的功能，主界面通常已经最小化到托盘
+        _overlayItem = new ToolStripMenuItem("显示游戏内悬浮窗")
+        {
+            CheckOnClick = true,
+            Checked = _overlaySettings.Enabled,
+        };
+        _overlayItem.CheckedChanged += (_, _) => ToggleOverlay(_overlayItem.Checked);
+
         menu.Items.Add("显示主界面", null, (_, _) => ShowMainWindow());
+        menu.Items.Add(_overlayItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitApplication());
 
         _tray.ContextMenuStrip = menu;
         _tray.DoubleClick += (_, _) => ShowMainWindow();
+
+        // 上次是开着的就自动恢复（用户关游戏后忘了关也符合预期）
+        if (_overlaySettings.Enabled) ToggleOverlay(true);
     }
+
+    /// <summary>
+    /// 开关悬浮窗。
+    ///
+    /// 悬浮窗只显示系统级指标（显存/内存/GPU/CPU），**不读游戏进程任何信息**，
+    /// 也不注入任何进程——这是「保证账号安全」约束下的唯一实现方式。
+    /// 代价是它对独占全屏无效（会被游戏画面盖住），只对窗口化生效。
+    /// </summary>
+    private void ToggleOverlay(bool on)
+    {
+        if (on)
+        {
+            if (_overlay is null)
+            {
+                _overlay = new OverlayWindow();
+                _overlay.PositionChanged = SaveOverlayPosition;
+                _overlay.RestorePosition(_overlaySettings.Left, _overlaySettings.Top);
+                _overlay.Show();
+            }
+            else
+            {
+                _overlay.Show();
+            }
+
+            // 把主采样器的数据推给悬浮窗（复用同一个采集器，不额外开一套计数器）
+            if (_overlayPump is null)
+            {
+                _overlayPump = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
+                _overlayPump.Tick += (_, _) => PumpOverlay();
+                _overlayPump.Start();
+            }
+
+            PumpOverlay();
+        }
+        else
+        {
+            _overlayPump?.Stop();
+            _overlayPump = null;
+
+            if (_overlay is not null)
+            {
+                _overlay.PositionChanged = null; // 关窗时不要再回调写文件
+                _overlay.Close();
+                _overlay = null;
+            }
+        }
+
+        _overlaySettings.Enabled = on;
+        PersistOverlaySettings();
+
+        if (_overlayItem is not null && _overlayItem.Checked != on)
+            _overlayItem.Checked = on;
+    }
+
+    /// <summary>每秒把最新采样推给悬浮窗。</summary>
+    private void PumpOverlay()
+    {
+        if (_overlay is null || _vm is null) return;
+
+        _overlay.Update(_vm.GetOverlayContent());
+    }
+
+    private void SaveOverlayPosition(double left, double top)
+    {
+        _overlaySettings.Left = left;
+        _overlaySettings.Top = top;
+        PersistOverlaySettings();
+    }
+
+    private void PersistOverlaySettings()
+        => _overlayStore.Save(_overlaySettings, out _);
 
     /// <summary>恢复并激活主窗口；窗口被用户销毁时（异常路径）重新建一个。</summary>
     private void ShowMainWindow()
