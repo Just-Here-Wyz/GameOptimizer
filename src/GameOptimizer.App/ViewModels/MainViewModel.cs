@@ -271,11 +271,36 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     private double _cpuCorePercent;
+    /// <summary>
+    /// 仪表盘上显示的 CPU 峰值 = **性能核峰值**。
+    ///
+    /// 不用全局单核峰值：实测本机把 8 个后台进程绑到 E 核满载时，
+    /// 全局峰值亮红显示 98.6%，而跑游戏的 P 核只有 29.3%，会让人白白降画质。
+    /// </summary>
     public double CpuCorePercent
     {
         get => _cpuCorePercent;
-        private set { _cpuCorePercent = OccupancyPalette.Clamp(value); OnPropertyChanged(); }
+        private set
+        {
+            _cpuCorePercent = OccupancyPalette.Clamp(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CpuCoreLabel));
+        }
     }
+
+    /// <summary>仪表的标题：混合架构机器上写明是「P 核峰值」，避免与总 CPU 混淆。</summary>
+    public string CpuCoreLabel => IsHybridCpu ? "CPU P 核峰值" : "CPU 单核峰值";
+
+    /// <summary>仪表下方的说明：讲清这个数是怎么算出来的。</summary>
+    public string CpuCoreHint => IsHybridCpu
+        ? "性能核中最高的一个（跑游戏的地方）"
+        : "占用最高的一个核";
+
+    /// <summary>本机是否为混合架构（有大小核）。</summary>
+    public bool IsHybridCpu => _sampler.Topology.IsHybrid;
+
+    /// <summary>CPU 拓扑的可读描述，例如「4 大核 8 线程 · 8 小核」。</summary>
+    public string CpuTopologyText => _sampler.Topology.Describe();
 
     // ---------- 系统压力：磁盘吞吐 + 总 CPU（补单核峰值的盲区） ----------
 
@@ -534,7 +559,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 : 0;
 
             GpuPercent = frame.Gpu3DPercent;
-            CpuCorePercent = frame.MaxCorePercent;
+            CpuCorePercent = frame.PerformanceCorePercent;
         }
         catch (Exception ex)
         {

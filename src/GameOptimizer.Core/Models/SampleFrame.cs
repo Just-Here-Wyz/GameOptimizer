@@ -8,7 +8,24 @@ public sealed record SampleFrame(
     double CommittedMb,
     double AvailableRamMb,
     double Gpu3DPercent,
-    double MaxCorePercent);
+    double MaxCorePercent)
+{
+    /// <summary>
+    /// 性能核（P-core）峰值占用。
+    ///
+    /// 为什么界面要用它而不是 <see cref="MaxCorePercent"/>：
+    /// 实测本机（i7-1360P，4 大核 8 线程 + 8 小核）把 8 个后台进程绑到 E 核满载时，
+    /// 全局单核峰值显示 98.6%（红色报警）而跑游戏的 P 核最高只有 29.3%——
+    /// 玩家会白白去降画质。P 核峰值才是影响帧生成的信号。
+    ///
+    /// 全同构机器（无大小核）上它等于 <see cref="MaxCorePercent"/>。
+    /// 默认值与 MaxCorePercent 相同，保证既有调用方行为不变。
+    /// </summary>
+    public double PerformanceCorePercent { get; init; } = MaxCorePercent;
+
+    /// <summary>能效核（E-core）峰值占用。无小核的机器上为 0。</summary>
+    public double EfficiencyCorePercent { get; init; }
+}
 
 /// <summary>显存判定口径：核显没有独立显存，必须同时看共享显存与系统内存余量。</summary>
 public enum VramVerdict

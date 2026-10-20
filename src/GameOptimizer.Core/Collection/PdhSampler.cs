@@ -13,6 +13,9 @@ public sealed class PdhSampler : IDisposable
     /// <summary>判断"这块显卡是不是核显"：专用显存为 0 即视为核显。</summary>
     private readonly List<PerformanceCounter> _gpuEngines = [];
     private readonly List<PerformanceCounter> _cpuCores = [];
+
+    /// <summary>逻辑核计数器 → 逻辑核序号。算 P/E 核峰值时按它归类。</summary>
+    private readonly Dictionary<PerformanceCounter, int> _cpuCoreIndex = [];
     private readonly List<PerformanceCounter> _adapterCommitted = [];
     private PerformanceCounter? _availableRam;
     private PerformanceCounter? _sharedUsage;
@@ -25,6 +28,12 @@ public sealed class PdhSampler : IDisposable
 
     /// <summary>主适配器的 LUID，用于把进程级计数器对上号。</summary>
     public string? PrimaryLuid { get; private set; }
+
+    /// <summary>
+    /// CPU 拓扑（大小核）。Initialize 时读取，供界面区分 P 核 / E 核峰值。
+    /// 读不到时退化为「全是性能核」，行为与本功能引入前一致。
+    /// </summary>
+    public CpuTopology Topology { get; private set; } = CpuTopology.Uniform(Environment.ProcessorCount);
 
     public bool Initialize()
     {
@@ -65,10 +74,18 @@ public sealed class PdhSampler : IDisposable
             foreach (var inst in engineCat.GetInstanceNames().Where(i => i.Contains("engtype_3D", StringComparison.OrdinalIgnoreCase)))
                 _gpuEngines.Add(new PerformanceCounter("GPU Engine", "Utilization Percentage", inst, true));
 
-            // CPU 单核：实例名形如 "0,0"
+            // CPU 单核：实例名形如 "0,0"。
+            // 连同逻辑核序号一起记下来，采的时候才能算「P 核峰值」。
             var procCat = new PerformanceCounterCategory("Processor Information");
             foreach (var inst in procCat.GetInstanceNames().Where(i => i.Contains(',') && !i.Contains('_')))
-                _cpuCores.Add(new PerformanceCounter("Processor Information", "% Processor Time", inst, true));
+            {
+                var counter = new PerformanceCounter("Processor Information", "% Processor Time", inst, true);
+                _cpuCores.Add(counter);
+                // 实例名 = "组,逻辑核"，组在单路机器上恒为 0
+                if (TryParseProcessorIndex(inst, out var index)) _cpuCoreIndex[counter] = index;
+            }
+
+            Topology = CpuTopology.Detect();
 
             IsReady = true;
             return true;
@@ -109,10 +126,16 @@ public sealed class PdhSampler : IDisposable
         }
 
         double coreMax = 0;
+        var usageByProcessor = new Dictionary<int, double>(_cpuCores.Count);
+
         foreach (var c in _cpuCores)
         {
-            try { var v = c.NextValue(); if (v > coreMax) coreMax = v; }
-            catch { }
+            double v;
+            try { v = c.NextValue(); }
+            catch { continue; }
+
+            if (v > coreMax) coreMax = v;
+            if (_cpuCoreIndex.TryGetValue(c, out var index)) usageByProcessor[index] = v;
         }
 
         return new SampleFrame(
@@ -125,7 +148,27 @@ public sealed class PdhSampler : IDisposable
             // PDH 在两次读取间隔异常时会算出超过 100 的百分比（实测见过 123%），
             // 利用率语义上不可能越界，必须钳制，否则界面上会出现荒谬数字
             Gpu3DPercent: ClampPercent(gpuMax),
-            MaxCorePercent: ClampPercent(coreMax));
+            MaxCorePercent: ClampPercent(coreMax))
+        {
+            // 界面取 P 核峰值：E 核被后台挤满不代表游戏有事（实测能差 70 个百分点）
+            PerformanceCorePercent = ClampPercent(Topology.PerformancePeak(usageByProcessor)),
+            EfficiencyCorePercent = ClampPercent(Topology.EfficiencyPeak(usageByProcessor)),
+        };
+    }
+
+    /// <summary>
+    /// 从 PDH 实例名 "组,逻辑核" 解析出逻辑核序号。
+    /// 解析失败返回 false：宁可这类核不参与 P/E 归类，也不要瞎猜一个序号。
+    /// </summary>
+    internal static bool TryParseProcessorIndex(string instanceName, out int index)
+    {
+        index = -1;
+        if (string.IsNullOrWhiteSpace(instanceName)) return false;
+
+        var parts = instanceName.Split(',');
+        if (parts.Length != 2) return false;
+
+        return int.TryParse(parts[1], out index) && index >= 0;
     }
 
     /// <summary>把百分比钳制到 [0,100]，并丢弃非有限值。</summary>

@@ -213,10 +213,12 @@
                                                            HorizontalAlignment="Center"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Center">
+                                                <!-- 混合架构机器上口径是「P 核峰值」，标题随拓扑变化 -->
                                                 <views:PercentGauge Width="104" Height="104" Value="{Binding CpuCorePercent}"/>
-                                                <TextBlock Text="CPU 单核峰值" HorizontalAlignment="Center" Margin="0,10,0,2"/>
-                                                <TextBlock Text="占用最高的一个核" Style="{StaticResource Faint}"
-                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock Text="{Binding CpuCoreLabel}" HorizontalAlignment="Center" Margin="0,10,0,2"/>
+                                                <TextBlock Text="{Binding CpuCoreHint}" Style="{StaticResource Faint}"
+                                                           HorizontalAlignment="Center" TextAlignment="Center"
+                                                           TextWrapping="Wrap" MaxWidth="130"/>
                                             </StackPanel>
                                         </UniformGrid>
 
@@ -264,7 +266,7 @@
                                                 <TextBlock Text="{Binding TotalCpuText}" FontSize="22" FontWeight="SemiBold"
                                                            HorizontalAlignment="Center"/>
                                                 <TextBlock Text="总 CPU" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
-                                                <TextBlock Text="整机占用，补单核峰值的盲区" Style="{StaticResource Faint}"
+                                                <TextBlock Text="{Binding CpuTopologyText}" Style="{StaticResource Faint}"
                                                            TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Center">
