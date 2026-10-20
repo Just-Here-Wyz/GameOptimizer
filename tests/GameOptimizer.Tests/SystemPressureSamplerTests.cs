@@ -106,6 +106,28 @@ public class SystemPressureSamplerTests
     }
 
     [Fact]
+    public void 磁盘吞吐必须真的采到而不是静默降级()
+    {
+        // 回归：类别名写成 "Physical Disk"（带空格）时，
+        // PerformanceCounterCategory 抛 "Category does not exist"，
+        // 磁盘项被 try/catch 静默吞掉 → AvailableMetrics 里没有「磁盘吞吐」，
+        // 界面只显示 0 B/s。而 Get-Counter 用带空格的路径却能读到数，
+        // 所以手工验证很难发现。正确类别名是 "PhysicalDisk"（无空格）。
+        using var sampler = new SystemPressureSampler();
+        if (!sampler.Initialize()) return;
+
+        sampler.AvailableMetrics.Should().Contain("磁盘吞吐",
+            "磁盘计数器在本机存在且可读，不该被类别名写错导致静默降级");
+    }
+
+    [Fact]
+    public void 磁盘类别名必须是无空格的形式()
+    {
+        // 直接锁死常量：改成 "Physical Disk" 会让上面那条用例变红
+        SystemPressureSampler.DiskCategory.Should().Be("PhysicalDisk");
+    }
+
+    [Fact]
     public void 吞吐量文本应按量级选单位()
     {
         ThroughputText.Format(1.2 * 1024 * 1024 * 1024).Should().Be("1.2 GB/s");

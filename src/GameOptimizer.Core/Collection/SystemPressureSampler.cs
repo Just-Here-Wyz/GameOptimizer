@@ -82,10 +82,16 @@ public sealed class SystemPressureSampler : IDisposable
         try
         {
             // 两项独立降级：某一个计数器缺失时另一项照常工作
-            foreach (var inst in SafeInstances("Physical Disk"))
+            //
+            // 类别名必须是 "PhysicalDisk"（无空格），不是 "Physical Disk"。
+            // 实测：Get-Counter 的路径写成 \PhysicalDisk(_Total)\ 能读到数，
+            // 但 PerformanceCounterCategory("Physical Disk") 会抛
+            // "Category 'Physical Disk' does not exist." ——两者对空格的处理不同。
+            // 写错时磁盘项会静默降级为不可用，界面只显示「0 B/s」，极难发现。
+            foreach (var inst in SafeInstances(DiskCategory))
             {
                 if (inst == "_Total") continue; // 分盘求和，避免 _Total 与明细重复计数
-                var c = TryCreate("Physical Disk", "Disk Bytes/sec", inst);
+                var c = TryCreate(DiskCategory, "Disk Bytes/sec", inst);
                 if (c is not null) _disks.Add(c);
             }
 
@@ -106,6 +112,12 @@ public sealed class SystemPressureSampler : IDisposable
             return false;
         }
     }
+
+    /// <summary>
+    /// 磁盘计数器类别名。**无空格**，与 PDH 路径 \PhysicalDisk(...) 一致。
+    /// 写成 "Physical Disk" 会让 <see cref="PerformanceCounterCategory"/> 找不到类别。
+    /// </summary>
+    internal const string DiskCategory = "PhysicalDisk";
 
     /// <summary>首次读数恒为 0，必须预热后再采。</summary>
     public void Warmup(int delayMs = 300)

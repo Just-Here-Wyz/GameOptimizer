@@ -52,7 +52,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ReloadWhitelistCommand = new RelayCommand(_ => LoadWhitelistFromDisk());
         ScanPeripheralsCommand = new RelayCommand(_ => RefreshPeripherals());
         OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
-        OpenCpuDetailCommand = new RelayCommand(_ => IsCpuDetailOpen = true);
+        OpenCpuDetailCommand = new RelayCommand(_ =>
+        {
+            IsCpuDetailOpen = true;
+            // 立刻采一次：采集改成按需后，不主动填一次会让详情页第一秒全是 0
+            Tick();
+        });
         CloseCpuDetailCommand = new RelayCommand(_ => IsCpuDetailOpen = false);
 
         LoadWhitelistFromDisk();
@@ -610,7 +615,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PeripheralStatus = $"采集异常：{ex.Message}";
         }
 
-        // 系统压力单独 try：它挂了不应把上面那四个仪表一起拖黑
+        // 系统压力与逐核分组只在详情页展开时采集：
+        // 它们现在只在详情页展示，收起状态下每秒读一遍纯属浪费
+        // （磁盘计数器要给各物理盘各读一次，不是零成本）。
+        if (!IsCpuDetailOpen) return;
+
         try
         {
             if (_pressureReady)
@@ -626,9 +635,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PressureStatus = $"系统压力采集异常：{ex.Message}";
         }
 
-        // 详情页只在展开时更新：收起状态下算一遍逐核分组是纯浪费。
-        // 用全限定名：属性也叫 CpuDetail，直接写 CpuDetail.From 会被解析成属性访问。
-        if (IsCpuDetailOpen && frame is not null)
+        // 逐核分组。用全限定名：属性也叫 CpuDetail，直接写 CpuDetail.From 会被解析成属性访问。
+        if (frame is not null)
             CpuDetail = GameOptimizer.Core.Analysis.CpuDetail.From(
                 frame, _sampler.Topology, TotalCpuPercent);
     }

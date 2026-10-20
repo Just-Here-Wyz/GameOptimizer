@@ -1,4 +1,4 @@
-﻿<Window x:Class="GameOptimizer.App.Views.MainWindow"
+<Window x:Class="GameOptimizer.App.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:GameOptimizer.App.Views"
@@ -276,36 +276,6 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!--
-                                  系统压力：两项，补现有监控的盲区。
-                                  · 总 CPU：仪表盘上只有「单核峰值」，看不出整机是否被吃满
-                                  · 磁盘吞吐：贴图流式加载卡不卡在磁盘上
-                                  其余候选指标（队列长度 / 分页文件 / 网络吞吐）实测价值不足，
-                                  温度需内核驱动，均不采——见 docs/04-已知限制.md。
-                                -->
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <TextBlock Text="系统压力" FontWeight="SemiBold" FontSize="14"/>
-                                        <TextBlock Text="{Binding PressureStatus}" Style="{StaticResource Faint}"
-                                                   Margin="0,3,0,10" TextWrapping="Wrap"/>
-                                        <UniformGrid Columns="2">
-                                            <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="{Binding TotalCpuText}" FontSize="22" FontWeight="SemiBold"
-                                                           HorizontalAlignment="Center"/>
-                                                <TextBlock Text="总 CPU" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
-                                                <TextBlock Text="{Binding CpuTopologyText}" Style="{StaticResource Faint}"
-                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
-                                            </StackPanel>
-                                            <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="{Binding DiskText}" FontSize="22" FontWeight="SemiBold"
-                                                           HorizontalAlignment="Center"/>
-                                                <TextBlock Text="磁盘吞吐" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
-                                                <TextBlock Text="贴图流式加载是否卡在磁盘" Style="{StaticResource Faint}"
-                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
-                                            </StackPanel>
-                                        </UniformGrid>
-                                    </StackPanel>
-                                </Border>
 
                                 <!-- 游戏模式 -->
                                 <Border Style="{StaticResource Card}">
@@ -519,6 +489,36 @@
                                                 <TextBlock Text="总 CPU" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
                                                 <TextBlock Text="全部核的平均" Style="{StaticResource Faint}"
                                                            TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
+                                            </StackPanel>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <!--
+                                  系统压力：从总览页搬进来（总 CPU 上面已有，这里不重复）。
+                                  磁盘吞吐回答「贴图流式加载卡不卡在磁盘上」，与 CPU 同属整机指标，
+                                  放在这里方便和 CPU 一起看。
+                                -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="系统压力" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="{Binding PressureStatus}" Style="{StaticResource Faint}"
+                                                   Margin="0,3,0,10" TextWrapping="Wrap"/>
+                                        <UniformGrid Columns="2">
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding DiskText}" FontSize="22" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock Text="磁盘吞吐" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="贴图流式加载是否卡在磁盘" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuTopologyText}" FontSize="15" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center" TextAlignment="Center"
+                                                           TextWrapping="Wrap" MaxWidth="240" VerticalAlignment="Center"/>
+                                                <TextBlock Text="CPU 拓扑" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="区分大小核的依据" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
                                             </StackPanel>
                                         </UniformGrid>
                                     </StackPanel>
