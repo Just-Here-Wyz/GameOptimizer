@@ -85,4 +85,52 @@ public class SteamLibraryScannerTests
     {
         SteamLibraryScanner.Scan(@"Z:\definitely-not-exist").Should().BeEmpty();
     }
+
+    [Fact]
+    public void 兜底扫描不应把卸载残留的空壳目录当游戏()
+    {
+        // 实测：ChainedTogether 卸载后 Steam 只留一个 53 字节的云存档占位文件，
+        // 目录里没有任何 exe。这类残留绝不能入库，否则用户看到「已卸载的游戏还在库里」。
+        var dir = Path.Combine(Path.GetTempPath(), "go-test-" + Guid.NewGuid().ToString("N"));
+        var gameDir = Path.Combine(dir, "ChainedTogether");
+        Directory.CreateDirectory(Path.Combine(gameDir, "ChainedTogether", "CustomLevels"));
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(gameDir, "ChainedTogether", "CustomLevels", "steam_autocloud.vdf"),
+                "\"steam_autocloud.vdf\" { }");
+
+            SteamLibraryScanner.BuildFallbackEntry(gameDir).Should().BeNull("没有 exe 的目录是卸载残留");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void 兜底扫描应保留带主程序的目录()
+    {
+        // 移库场景：目录还在、里面有 exe，但没有 appmanifest → 必须入库
+        var dir = Path.Combine(Path.GetTempPath(), "go-test-" + Guid.NewGuid().ToString("N"));
+        var gameDir = Path.Combine(dir, "MyGame");
+        Directory.CreateDirectory(gameDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(gameDir, "MyGame.exe"), "fake");
+
+            var entry = SteamLibraryScanner.BuildFallbackEntry(gameDir);
+
+            entry.Should().NotBeNull();
+            entry!.Name.Should().Be("MyGame");
+            entry.ExecutablePath.Should().EndWith("MyGame.exe");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void 真实扫描不应包含已卸载的ChainedTogether()
+    {
+        // 本机实测：ChainedTogether 只剩云存档占位文件（53 字节），已卸载
+        var games = NonGameFilter.Apply(GameLibrary.ScanAll());
+
+        games.Should().NotContain(g => g.Name.Contains("ChainedTogether", StringComparison.OrdinalIgnoreCase));
+    }
 }

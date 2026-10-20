@@ -55,22 +55,39 @@ public sealed class SteamLibraryScanner : IGameLibraryScanner
             {
                 if (byInstallPath.Contains(NormalizePath(dir))) continue;
 
-                var dirName = Path.GetFileName(dir);
-                // 依赖库等非游戏目录
-                if (NonGameFilter.IsNonGameDirectoryName(dirName)) continue;
-
-                var entry = new GameEntry(
-                    Name: SteamDisplayNames.Resolve("", dirName),
-                    AppId: "",
-                    InstallPath: dir,
-                    ExecutablePath: FindMainExecutable(dir),
-                    SizeOnDiskGb: Math.Round(DirectorySizeGb(dir), 2),
-                    Source: "Steam");
-                results.Add(entry);
+                var entry = BuildFallbackEntry(dir);
+                if (entry is not null) results.Add(entry);
             }
         }
 
         return results.OrderByDescending(g => g.SizeOnDiskGb).ToList();
+    }
+
+    /// <summary>
+    /// 兜底扫描的单目录判定（借鉴原工具做法）：
+    /// steamapps\common 下没有 appmanifest 的目录同样入库——但必须真的还有游戏本体。
+    /// 实测：游戏卸载后 Steam 会留一个只剩云存档占位文件（steam_autocloud.vdf）的空壳目录，
+    /// 里面没有任何 exe；这类卸载残留不能入库，否则用户看到「已卸载的游戏还在库里」。
+    /// </summary>
+    internal static GameEntry? BuildFallbackEntry(string dir)
+    {
+        if (!Directory.Exists(dir)) return null;
+
+        var dirName = Path.GetFileName(dir.TrimEnd('\\'));
+        // 依赖库等非游戏目录
+        if (NonGameFilter.IsNonGameDirectoryName(dirName)) return null;
+
+        // 卸载残留：游戏本体 exe 已被删除，只剩云存档占位文件 → 不入库
+        var exe = FindMainExecutable(dir);
+        if (exe is null) return null;
+
+        return new GameEntry(
+            Name: SteamDisplayNames.Resolve("", dirName),
+            AppId: "",
+            InstallPath: dir,
+            ExecutablePath: exe,
+            SizeOnDiskGb: Math.Round(DirectorySizeGb(dir), 2),
+            Source: "Steam");
     }
 
     private static double DirectorySizeGb(string path)
