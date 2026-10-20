@@ -9,9 +9,9 @@
     实际版本号由用户手动设定，这里只放当前值。
   -->
   <PropertyGroup>
-    <Version>1.0.2</Version>
-    <AssemblyVersion>1.0.2.0</AssemblyVersion>
-    <FileVersion>1.0.2.0</FileVersion>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
     <Product>游戏优化助手</Product>
     <Company>GameOptimizer</Company>
     <Copyright>Copyright © 2026</Copyright>

@@ -37,7 +37,30 @@ public sealed class PeripheralScanner
                     n.HidManufacturer))
                 .ToList();
 
-            return new PeripheralScanResult(PeripheralAnalyzer.Build(nodes), null);
+            var devices = PeripheralAnalyzer.Build(nodes);
+
+            // 实时读取 VXE/ATK（Compx）鼠标电量（私有 HID 协议），
+            // 覆盖扫描快照里读不到的电量；失败保持原样显示「未知」
+            try
+            {
+                var vxeLevel = VxeBatterySource.ReadBatteryPercent();
+                if (vxeLevel is not null)
+                {
+                    var compxVid = VxeBatterySource.FindCompxVid();
+                    devices = devices.Select(d =>
+                        d.Kind == PeripheralKind.Mouse
+                        && d.BatteryPercent is null
+                        && VxeBatterySource.IsCompxMouse(d.InstanceHint, compxVid)
+                            ? d with { BatteryPercent = vxeLevel, BatterySource = "Compx 私有协议" }
+                            : d).ToList();
+                }
+            }
+            catch
+            {
+                // 实时读取失败不影响其余外设展示
+            }
+
+            return new PeripheralScanResult(devices, null);
         }
         catch (Exception ex)
         {
