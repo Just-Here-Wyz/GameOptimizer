@@ -25,6 +25,13 @@ public sealed record SampleFrame(
 
     /// <summary>能效核（E-core）峰值占用。无小核的机器上为 0。</summary>
     public double EfficiencyCorePercent { get; init; }
+
+    /// <summary>
+    /// 逐逻辑核占用率，键是逻辑核序号（与 PDH 实例名 "组,核" 的后者一致）。
+    /// 供 CPU 详情页展示每核条形图；空字典表示这次没采到逐核数据。
+    /// </summary>
+    public IReadOnlyDictionary<int, double> PerCorePercent { get; init; }
+        = new Dictionary<int, double>();
 }
 
 /// <summary>显存判定口径：核显没有独立显存，必须同时看共享显存与系统内存余量。</summary>

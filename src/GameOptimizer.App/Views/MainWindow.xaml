@@ -1,4 +1,4 @@
-<Window x:Class="GameOptimizer.App.Views.MainWindow"
+﻿<Window x:Class="GameOptimizer.App.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:GameOptimizer.App.Views"
@@ -29,6 +29,8 @@
         <views:NullToCollapsedInverseConverter x:Key="NullToCollapsedInverse"/>
         <!-- 空字符串 → 收起：未提权提示、优化结果有内容才占位 -->
         <views:StringToVisibilityConverter x:Key="StringToVisibility"/>
+        <!-- 百分比 → 星号列宽：条形图按比例分宽度（绑 Width 会变成像素） -->
+        <views:PercentToStarConverter x:Key="PercentToStar"/>
         <!--
           左侧导航项：参考图没有左侧大栏，但工具本身靠它切页。
           这里把它压窄（72px）、去掉卡片感，做成图标 + 文字的紧凑竖排，
@@ -148,8 +150,9 @@
 
                 <!-- 右侧页面 -->
                 <Grid Grid.Column="1" Margin="0">
-                    <!-- 总览页 -->
-                    <Grid x:Name="HomePage">
+                    <!-- 总览页：进入 CPU 详情页时收起，两者共用同一区域 -->
+                    <Grid x:Name="HomePage"
+                          Visibility="{Binding IsOverviewVisible, Converter={StaticResource BoolToVisibility}}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -213,12 +216,36 @@
                                                            HorizontalAlignment="Center"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Center">
-                                                <!-- 混合架构机器上口径是「P 核峰值」，标题随拓扑变化 -->
-                                                <views:PercentGauge Width="104" Height="104" Value="{Binding CpuCorePercent}"/>
-                                                <TextBlock Text="{Binding CpuCoreLabel}" HorizontalAlignment="Center" Margin="0,10,0,2"/>
-                                                <TextBlock Text="{Binding CpuCoreHint}" Style="{StaticResource Faint}"
-                                                           HorizontalAlignment="Center" TextAlignment="Center"
-                                                           TextWrapping="Wrap" MaxWidth="130"/>
+                                                <!-- P 核峰值，点击进入详情页看每颗核 -->
+                                                <Button Command="{Binding OpenCpuDetailCommand}"
+                                                        Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                        ToolTip="点击查看每颗核的占用详情">
+                                                    <Button.Template>
+                                                        <ControlTemplate TargetType="Button">
+                                                            <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="6">
+                                                                <StackPanel HorizontalAlignment="Center">
+                                                                    <views:PercentGauge Width="104" Height="104"
+                                                                                        Value="{Binding CpuCorePercent}"/>
+                                                                    <TextBlock Text="{Binding CpuCoreLabel}"
+                                                                               HorizontalAlignment="Center" Margin="0,10,0,2"
+                                                                               Foreground="{StaticResource TextPrimary}"/>
+                                                                    <TextBlock Text="{Binding CpuCoreHint}"
+                                                                               Style="{StaticResource Faint}"
+                                                                               HorizontalAlignment="Center" TextAlignment="Center"
+                                                                               TextWrapping="Wrap" MaxWidth="130"/>
+                                                                    <TextBlock Text="查看每核 →" FontSize="10"
+                                                                               Foreground="#FF4C8DFF"
+                                                                               HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter TargetName="Bd" Property="Background" Value="#FF22242A"/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Button.Template>
+                                                </Button>
                                             </StackPanel>
                                         </UniformGrid>
 
@@ -408,6 +435,170 @@
                                                                        ToolTip="{Binding DemandText}"/>
                                                         </Grid>
                                                     </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!--
+                      CPU 详情页
+                      从总览页点击 CPU 仪表进入，与总览页共用同一区域，不改左侧导航。
+                      回答「哪个核在忙」——这是仪表盘给不了的。
+                    -->
+                    <Grid x:Name="CpuDetailPage"
+                          Visibility="{Binding IsCpuDetailOpen, Converter={StaticResource BoolToVisibility}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 页头：返回按钮 + 标题 -->
+                        <Grid Grid.Row="0" Margin="24,20,24,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Content="← 返回" Command="{Binding CloseCpuDetailCommand}"
+                                    VerticalAlignment="Center" Margin="0,0,14,0"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="CPU 详情" Style="{StaticResource H1}"/>
+                                <TextBlock Text="{Binding CpuDetail.TopologyText}" Style="{StaticResource Muted}"
+                                           Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,24">
+                            <StackPanel>
+                                <!-- 结论：详情页最重要的一行，直接说要不要担心 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="结论" FontWeight="SemiBold" FontSize="13"/>
+                                        <TextBlock Text="{Binding CpuDetail.VerdictText}" FontSize="15"
+                                                   FontWeight="SemiBold" Foreground="{StaticResource Accent}"
+                                                   TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                        <TextBlock Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                   Text="大核（P-core）跑游戏主线程，它满了才需要降画质；小核（E-core）被后台占满通常不影响帧率。"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 汇总：四个数字并排，说明各自口径 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="汇总" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Style="{StaticResource Faint}" Margin="0,3,0,10" TextWrapping="Wrap"
+                                                   Text="「P 核峰值」和「总 CPU」经常差很多，这是正常的：前者是最高的一颗核，后者是全部核的平均。"/>
+                                        <UniformGrid Columns="4">
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuDetail.PerformancePeakPercent, StringFormat={}{0:F0}%}"
+                                                           FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="P 核峰值" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="最高的一颗大核" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuDetail.EfficiencyPeakPercent, StringFormat={}{0:F0}%}"
+                                                           FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="E 核峰值" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="最高的一颗小核" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuDetail.GlobalPeakPercent, StringFormat={}{0:F0}%}"
+                                                           FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="全局峰值" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="全部核里最高的一个" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuDetail.TotalCpuPercent, StringFormat={}{0:F0}%}"
+                                                           FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="总 CPU" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="全部核的平均" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
+                                            </StackPanel>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 性能核组 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding CpuDetail.PerformanceCore.Title}"
+                                                   FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="{Binding CpuDetail.PerformanceCore.Subtitle}"
+                                                   Style="{StaticResource Faint}" Margin="0,3,0,10" TextWrapping="Wrap"/>
+                                        <ItemsControl ItemsSource="{Binding CpuDetail.PerformanceCore.Bars}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,3" Height="22">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="72"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="52"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding Index, StringFormat=逻辑核 {0}}"
+                                                                   Style="{StaticResource Faint}" VerticalAlignment="Center"/>
+                                                        <!-- 两列按比例分宽度：左=占用，右=剩余。
+                                                             百分比不能直接绑 Width（那是像素不是比例）。 -->
+                                                        <Grid Grid.Column="1" VerticalAlignment="Center" Height="14">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="{Binding Percent, Converter={StaticResource PercentToStar}}"/>
+                                                                <ColumnDefinition Width="{Binding Percent, Converter={StaticResource PercentToStar}, ConverterParameter=inverse}"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <Border Grid.Column="0" CornerRadius="3" Background="{Binding ColorHex}"
+                                                                    ToolTip="{Binding Percent, StringFormat={}{0:F1}%}"/>
+                                                            <Border Grid.Column="1" CornerRadius="0,3,3,0" Background="#FF1B1C21"/>
+                                                        </Grid>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Percent, StringFormat={}{0:F0}%}"
+                                                                   Foreground="{Binding ColorHex}" FontWeight="SemiBold"
+                                                                   VerticalAlignment="Center" TextAlignment="Right"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Style="{StaticResource Faint}" Margin="0,8,0,0"
+                                                   Text="同一物理核的两个超线程显示为两根条（序号相邻）。"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 能效核组：无小核的机器上自动收起 -->
+                                <Border Style="{StaticResource Card}"
+                                        Visibility="{Binding CpuDetail.IsHybrid, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding CpuDetail.EfficiencyCore.Title}"
+                                                   FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="{Binding CpuDetail.EfficiencyCore.Subtitle}"
+                                                   Style="{StaticResource Faint}" Margin="0,3,0,10" TextWrapping="Wrap"/>
+                                        <ItemsControl ItemsSource="{Binding CpuDetail.EfficiencyCore.Bars}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,3" Height="22">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="72"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="52"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding Index, StringFormat=逻辑核 {0}}"
+                                                                   Style="{StaticResource Faint}" VerticalAlignment="Center"/>
+                                                        <!-- 两列按比例分宽度：左=占用，右=剩余。
+                                                             百分比不能直接绑 Width（那是像素不是比例）。 -->
+                                                        <Grid Grid.Column="1" VerticalAlignment="Center" Height="14">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="{Binding Percent, Converter={StaticResource PercentToStar}}"/>
+                                                                <ColumnDefinition Width="{Binding Percent, Converter={StaticResource PercentToStar}, ConverterParameter=inverse}"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <Border Grid.Column="0" CornerRadius="3" Background="{Binding ColorHex}"
+                                                                    ToolTip="{Binding Percent, StringFormat={}{0:F1}%}"/>
+                                                            <Border Grid.Column="1" CornerRadius="0,3,3,0" Background="#FF1B1C21"/>
+                                                        </Grid>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Percent, StringFormat={}{0:F0}%}"
+                                                                   Foreground="{Binding ColorHex}" FontWeight="SemiBold"
+                                                                   VerticalAlignment="Center" TextAlignment="Right"/>
+                                                    </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>

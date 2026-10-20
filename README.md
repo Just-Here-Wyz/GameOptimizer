@@ -1,6 +1,6 @@
 # 游戏优化助手
 
-> 当前版本 **v2.0.2** ｜ Windows 10/11 ｜ [完整文档](docs/README.md)
+> 当前版本 **v2.1.0** ｜ Windows 10/11 ｜ [完整文档](docs/README.md)
 
 面向「显存不足 / 卡顿掉帧」的 Windows 桌面诊断工具。不做「一键提速」的承诺，而是把**显存水位 + 硬件占用 + 外设状态**摆到同一屏，告诉你卡顿到底来自哪里。
 
@@ -65,7 +65,7 @@ dotnet run --project src/GameOptimizer.App
 ```
 src/GameOptimizer.Core     采集、判定、外设识别、游戏模式动作（无 UI 依赖，可单测）
 src/GameOptimizer.App      WPF 界面（app.manifest 声明 requireAdministrator）
-tests/GameOptimizer.Tests  436 个 xUnit 用例
+tests/GameOptimizer.Tests  455 个 xUnit 用例
 tools/                     运维脚本
 docs/                      项目文档
 ```
@@ -82,5 +82,6 @@ dotnet test
 - **不可观测的不报结论**：读不到电量就显示「未知」；内存释放量以系统可用内存实测为准，
   不拿逐进程合计（会因共享页面重复计数虚高数倍）冒充
 - **不做静默安装**：不注入游戏进程、不装驱动、不改系统服务
+
 
 

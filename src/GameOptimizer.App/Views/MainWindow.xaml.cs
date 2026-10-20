@@ -79,7 +79,20 @@ public partial class MainWindow : Window
 
     private void ShowPage(int index)
     {
-        HomePage.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // 总览页的可见性由 ViewModel 的 IsOverviewVisible 管（它会被 CPU 详情页顶掉），
+        // 所以这里只在「切到外设 / 设置」时强制收起总览区；
+        // 「切回总览」时清掉本地值把控制权交还绑定，否则详情页会被无意关掉。
+        if (index == 0)
+        {
+            HomePage.ClearValue(VisibilityProperty);
+            CpuDetailPage?.ClearValue(VisibilityProperty);
+        }
+        else
+        {
+            HomePage.Visibility = Visibility.Collapsed;
+            if (CpuDetailPage is not null) CpuDetailPage.Visibility = Visibility.Collapsed;
+        }
+
         PeripheralPage.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
     }

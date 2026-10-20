@@ -8,6 +8,7 @@ using GameOptimizer.Core.Analysis;
 using GameOptimizer.Core.Collection;
 using GameOptimizer.Core.GameMode;
 using GameOptimizer.Core.Library;
+using GameOptimizer.Core.Models;
 using GameOptimizer.Core.Peripherals;
 
 public sealed class MainViewModel : INotifyPropertyChanged
@@ -51,6 +52,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ReloadWhitelistCommand = new RelayCommand(_ => LoadWhitelistFromDisk());
         ScanPeripheralsCommand = new RelayCommand(_ => RefreshPeripherals());
         OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
+        OpenCpuDetailCommand = new RelayCommand(_ => IsCpuDetailOpen = true);
+        CloseCpuDetailCommand = new RelayCommand(_ => IsCpuDetailOpen = false);
 
         LoadWhitelistFromDisk();
         ScanGames();
@@ -98,6 +101,45 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>首页内存仪表盘旁的「优化」按钮：触发 <see cref="MemoryCleanAction"/>。</summary>
     public RelayCommand OptimizeMemoryCommand { get; }
+
+    /// <summary>点击 CPU 仪表进入详情页。</summary>
+    public RelayCommand OpenCpuDetailCommand { get; }
+
+    /// <summary>详情页左上角「← 返回」。</summary>
+    public RelayCommand CloseCpuDetailCommand { get; }
+
+    // ---------- CPU 详情页 ----------
+
+    private bool _isCpuDetailOpen;
+    /// <summary>详情页是否展开。展开时总览页内容收起（同一区域切换，不改左侧导航）。</summary>
+    public bool IsCpuDetailOpen
+    {
+        get => _isCpuDetailOpen;
+        private set
+        {
+            _isCpuDetailOpen = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsOverviewVisible));
+        }
+    }
+
+    /// <summary>总览页主体是否可见（详情页展开时收起）。</summary>
+    public bool IsOverviewVisible => !IsCpuDetailOpen;
+
+    private CpuDetail? _cpuDetail;
+    /// <summary>详情页数据。进入详情页后每秒刷新。</summary>
+    public CpuDetail? CpuDetail
+    {
+        get => _cpuDetail;
+        private set
+        {
+            _cpuDetail = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasCpuDetail));
+        }
+    }
+
+    public bool HasCpuDetail => _cpuDetail is not null;
 
     // ---------- 首页「优化」内存：执行中 / 成功 / 失败三态 ----------
 
@@ -546,9 +588,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!SamplerReady) return;
 
+        SampleFrame? frame = null;
+
         try
         {
-            var frame = _sampler.Sample(Environment.TickCount64);
+            frame = _sampler.Sample(Environment.TickCount64);
 
             VramUsedMb = frame.CommittedMb;
             VramPercent = VramBudgetMb > 0 ? frame.CommittedMb / VramBudgetMb * 100 : 0;
@@ -581,6 +625,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             PressureStatus = $"系统压力采集异常：{ex.Message}";
         }
+
+        // 详情页只在展开时更新：收起状态下算一遍逐核分组是纯浪费。
+        // 用全限定名：属性也叫 CpuDetail，直接写 CpuDetail.From 会被解析成属性访问。
+        if (IsCpuDetailOpen && frame is not null)
+            CpuDetail = GameOptimizer.Core.Analysis.CpuDetail.From(
+                frame, _sampler.Topology, TotalCpuPercent);
     }
 
     private void RefreshAllGameStatus()

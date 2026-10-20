@@ -153,6 +153,10 @@ public sealed class PdhSampler : IDisposable
             // 界面取 P 核峰值：E 核被后台挤满不代表游戏有事（实测能差 70 个百分点）
             PerformanceCorePercent = ClampPercent(Topology.PerformancePeak(usageByProcessor)),
             EfficiencyCorePercent = ClampPercent(Topology.EfficiencyPeak(usageByProcessor)),
+            // 详情页要逐核条形图；这里做一次钳制，避免把 123% 这种值带到界面
+            PerCorePercent = usageByProcessor.ToDictionary(
+                kv => kv.Key,
+                kv => ClampPercent(kv.Value)),
         };
     }
 
