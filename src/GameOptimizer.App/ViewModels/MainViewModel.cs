@@ -749,39 +749,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         GameModeStatus = $"游戏模式：已开启{detail}；关闭时自动恢复这些进程";
     }
 
-    /// <summary>
-    /// 取当前一帧的悬浮窗内容，供 App 推给悬浮窗渲染。
-    ///
-    /// 复用主界面的同一个 <see cref="PdhSampler"/>：悬浮窗再开一套计数器
-    /// 等于把采集成本翻倍，而数据完全一样。
-    /// 返回纯数据（Core 模型），不认识任何 WPF 类型。
-    /// </summary>
-    public OverlayContent GetOverlayContent()
-    {
-        if (!SamplerReady)
-            return OverlayContent.Unavailable("采集未就绪");
-
-        try
-        {
-            var frame = _sampler.Sample(Environment.TickCount64);
-
-            // 磁盘吞吐平时只在详情页采；悬浮窗要显示它就得单独取一次。
-            // 取不到（计数器缺失 / 类别名错）就传 -1 表示不可用，不编一个 0。
-            double disk = -1;
-            if (_pressureReady)
-            {
-                try { disk = _pressure.Sample(Environment.TickCount64).DiskBytesPerSec; }
-                catch { disk = -1; }
-            }
-
-            return OverlayContent.From(frame, VramBudgetMb, TotalMemoryGb, disk);
-        }
-        catch (Exception ex)
-        {
-            return OverlayContent.Unavailable($"采集异常：{ex.Message}");
-        }
-    }
-
     /// <summary>停止采集。关窗口时调用，保证游戏模式一定被还原。</summary>
     public void Shutdown()
     {
