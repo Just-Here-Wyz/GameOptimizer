@@ -247,6 +247,37 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!--
+                                  系统压力：两项，补现有监控的盲区。
+                                  · 总 CPU：仪表盘上只有「单核峰值」，看不出整机是否被吃满
+                                  · 磁盘吞吐：贴图流式加载卡不卡在磁盘上
+                                  其余候选指标（队列长度 / 分页文件 / 网络吞吐）实测价值不足，
+                                  温度需内核驱动，均不采——见 docs/04-已知限制.md。
+                                -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="系统压力" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="{Binding PressureStatus}" Style="{StaticResource Faint}"
+                                                   Margin="0,3,0,10" TextWrapping="Wrap"/>
+                                        <UniformGrid Columns="2">
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding TotalCpuText}" FontSize="22" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock Text="总 CPU" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="整机占用，补单核峰值的盲区" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding DiskText}" FontSize="22" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock Text="磁盘吞吐" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                                <TextBlock Text="贴图流式加载是否卡在磁盘" Style="{StaticResource Faint}"
+                                                           TextAlignment="Center" TextWrapping="Wrap" MaxWidth="200"/>
+                                            </StackPanel>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- 游戏模式 -->
                                 <Border Style="{StaticResource Card}">
                                     <Grid>

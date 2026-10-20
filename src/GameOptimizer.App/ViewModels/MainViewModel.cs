@@ -13,6 +13,8 @@ using GameOptimizer.Core.Peripherals;
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly PdhSampler _sampler;
+    private readonly SystemPressureSampler _pressure = new();
+    private bool _pressureReady;
     private readonly GameModeController _gameMode;
     private readonly BackgroundWhitelistStore _whitelistStore = new();
     private readonly PeripheralScanner _peripherals = new();
@@ -29,6 +31,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         // 内存分母用标称容量：实测 16GB 条上报 15.73GB，用户心智里是 16
         TotalMemoryGb = SystemMemoryInfo.NominalGb;
+
+        // 系统压力采集独立降级：它采不到不该影响显存那套指标
+        _pressureReady = _pressure.Initialize();
+        if (_pressureReady) _pressure.Warmup();
+
+        PressureStatus = _pressureReady
+            ? $"系统压力：{string.Join(" · ", _pressure.AvailableMetrics)}"
+            : $"系统压力采集不可用：{_pressure.LastError}";
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
         _timer.Tick += (_, _) => Tick();
@@ -267,6 +277,46 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set { _cpuCorePercent = OccupancyPalette.Clamp(value); OnPropertyChanged(); }
     }
 
+    // ---------- 系统压力：磁盘吞吐 + 总 CPU（补单核峰值的盲区） ----------
+
+    private string _pressureStatus = "";
+    /// <summary>实际采到哪几项。采不到的项目被列出，而不是显示 0 冒充读数。</summary>
+    public string PressureStatus
+    {
+        get => _pressureStatus;
+        private set { _pressureStatus = value; OnPropertyChanged(); }
+    }
+
+    private double _diskBytesPerSec;
+    public double DiskBytesPerSec
+    {
+        get => _diskBytesPerSec;
+        private set
+        {
+            _diskBytesPerSec = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DiskText));
+        }
+    }
+
+    /// <summary>磁盘吞吐。贴图流式加载卡不卡在磁盘上，看这个。</summary>
+    public string DiskText => ThroughputText.Format(_diskBytesPerSec);
+
+    private double _totalCpuPercent;
+    public double TotalCpuPercent
+    {
+        get => _totalCpuPercent;
+        private set
+        {
+            _totalCpuPercent = OccupancyPalette.Clamp(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TotalCpuText));
+        }
+    }
+
+    /// <summary>整机 CPU 占用。仪表盘上的「单核峰值」看不出整机是否被吃满，这项才是。</summary>
+    public string TotalCpuText => $"{_totalCpuPercent:F0}%";
+
     private string _gameModeStatus = "游戏模式：未开启";
     public string GameModeStatus { get => _gameModeStatus; private set { _gameModeStatus = value; OnPropertyChanged(); } }
 
@@ -489,6 +539,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             PeripheralStatus = $"采集异常：{ex.Message}";
+        }
+
+        // 系统压力单独 try：它挂了不应把上面那四个仪表一起拖黑
+        try
+        {
+            if (_pressureReady)
+            {
+                var p = _pressure.Sample(Environment.TickCount64);
+
+                DiskBytesPerSec = p.DiskBytesPerSec;
+                TotalCpuPercent = p.TotalCpuPercent;
+            }
+        }
+        catch (Exception ex)
+        {
+            PressureStatus = $"系统压力采集异常：{ex.Message}";
         }
     }
 
