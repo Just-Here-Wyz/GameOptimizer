@@ -3,12 +3,15 @@ namespace GameOptimizer.App.Views;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using GameOptimizer.App.ViewModels;
 
 /// <summary>
-/// 无系统白框窗口的代码后置：自绘标题栏拖动、双击最大化、三个窗口按钮、页面切换。
+/// 无系统白框窗口的代码后置：自绘标题栏拖动、双击最大化、三个窗口按钮。
 ///
 /// 用 `WindowStyle=None` + `WindowChrome` 而不是 `AllowsTransparency=True`：
 /// 后者会关掉硬件加速并让文字发虚，参考图里的界面是清晰的。
+///
+/// 页面切换不在这里做：可见性全部由 ViewModel 绑定下来（见 <see cref="NavList_SelectionChanged"/>）。
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -24,6 +27,23 @@ public partial class MainWindow : Window
             VersionText.Text = $"版本 v{version.Major}.{version.Minor}.{version.Build}";
 
         StateChanged += (_, _) => UpdateMaximizeGlyph();
+
+        // 窗口可能被重建（托盘「显示主界面」走的就是这条路），
+        // ListBox 新建后 SelectedIndex 是 XAML 写死的 0，必须按 ViewModel 当前页面校正，
+        // 否则高亮停在「总览」而实际显示的是外设 / 设置页。
+        //
+        // 只在这一处写 NavList.SelectedIndex：它的 SelectionChanged 会回调 ViewModel，
+        // 而 PageRouter.Navigate 对「切到同一分区」返回 false，所以校正不会引起递归。
+        Loaded += (_, _) => SyncNavSelection();
+    }
+
+    /// <summary>把左侧导航的高亮对齐到 ViewModel 当前所在的页面。</summary>
+    private void SyncNavSelection()
+    {
+        if (DataContext is not MainViewModel vm) return;
+
+        var target = vm.CurrentNavIndex;
+        if (NavList.SelectedIndex != target) NavList.SelectedIndex = target;
     }
 
     /// <summary>
@@ -66,34 +86,17 @@ public partial class MainWindow : Window
     /// 左侧窄导航切换。用 Visibility 而不是 TabControl：
     /// 顶部标题栏与页内页头要长期可见，TabControl 会把它们一起装进页签里。
     /// v1.0.1 起右上角页签已删除，这里是唯一的页面切换入口。
+    ///
+    /// **这里绝不写 Visibility**：四个页面的可见性都由 ViewModel（<c>PageRouter</c>）绑定下来。
+    /// v2.1.1 及以前这里直接给 <c>HomePage.Visibility</c> 赋值、切回时又 <c>ClearValue</c>，
+    /// 而 Visibility 上有绑定——赋值会顶掉绑定，ClearValue 之后没有绑定可回落，
+    /// 于是总览页与 CPU 详情页同时回落到默认的 Visible 叠在一起，
+    /// 「← 返回」也因为绑定已失效而点了没反应。
     /// </summary>
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (HomePage is null || PeripheralPage is null || SettingsPage is null) return;
+        if (DataContext is not MainViewModel vm) return;
 
-        var index = NavList.SelectedIndex;
-        if (index < 0) return;
-
-        ShowPage(index);
-    }
-
-    private void ShowPage(int index)
-    {
-        // 总览页的可见性由 ViewModel 的 IsOverviewVisible 管（它会被 CPU 详情页顶掉），
-        // 所以这里只在「切到外设 / 设置」时强制收起总览区；
-        // 「切回总览」时清掉本地值把控制权交还绑定，否则详情页会被无意关掉。
-        if (index == 0)
-        {
-            HomePage.ClearValue(VisibilityProperty);
-            CpuDetailPage?.ClearValue(VisibilityProperty);
-        }
-        else
-        {
-            HomePage.Visibility = Visibility.Collapsed;
-            if (CpuDetailPage is not null) CpuDetailPage.Visibility = Visibility.Collapsed;
-        }
-
-        PeripheralPage.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
-        SettingsPage.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
+        vm.NavigateTo(NavList.SelectedIndex);
     }
 }

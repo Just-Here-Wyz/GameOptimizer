@@ -420,7 +420,7 @@
                       回答「哪个核在忙」——这是仪表盘给不了的。
                     -->
                     <Grid x:Name="CpuDetailPage"
-                          Visibility="{Binding IsCpuDetailOpen, Converter={StaticResource BoolToVisibility}}">
+                          Visibility="{Binding IsCpuDetailVisible, Converter={StaticResource BoolToVisibility}}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -609,7 +609,8 @@
                     </Grid>
 
                     <!-- 外设页 -->
-                    <Grid x:Name="PeripheralPage" Visibility="Collapsed">
+                    <Grid x:Name="PeripheralPage"
+                          Visibility="{Binding IsPeripheralsVisible, Converter={StaticResource BoolToVisibility}}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -716,7 +717,8 @@
                     </Grid>
 
                     <!-- 设置页：目前只放版本与说明，保持三页导航结构完整 -->
-                    <Grid x:Name="SettingsPage" Visibility="Collapsed">
+                    <Grid x:Name="SettingsPage"
+                          Visibility="{Binding IsSettingsVisible, Converter={StaticResource BoolToVisibility}}">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,20,24,24">
                             <StackPanel>
                                 <TextBlock Text="设置" Style="{StaticResource H1}" Margin="0,0,0,16"/>

@@ -9,6 +9,7 @@ using GameOptimizer.Core.Collection;
 using GameOptimizer.Core.GameMode;
 using GameOptimizer.Core.Library;
 using GameOptimizer.Core.Models;
+using GameOptimizer.Core.Navigation;
 using GameOptimizer.Core.Peripherals;
 
 public sealed class MainViewModel : INotifyPropertyChanged
@@ -54,11 +55,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
         OpenCpuDetailCommand = new RelayCommand(_ =>
         {
-            IsCpuDetailOpen = true;
+            if (_router.OpenCpuDetail()) RaisePageVisibilityChanged();
+
             // 立刻采一次：采集改成按需后，不主动填一次会让详情页第一秒全是 0
             Tick();
         });
-        CloseCpuDetailCommand = new RelayCommand(_ => IsCpuDetailOpen = false);
+        CloseCpuDetailCommand = new RelayCommand(_ =>
+        {
+            if (_router.CloseCpuDetail()) RaisePageVisibilityChanged();
+        });
 
         LoadWhitelistFromDisk();
         ScanGames();
@@ -113,23 +118,59 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>详情页左上角「← 返回」。</summary>
     public RelayCommand CloseCpuDetailCommand { get; }
 
-    // ---------- CPU 详情页 ----------
+    // ---------- 页面可见性（由 PageRouter 统一决定，界面只做单向绑定） ----------
 
-    private bool _isCpuDetailOpen;
-    /// <summary>详情页是否展开。展开时总览页内容收起（同一区域切换，不改左侧导航）。</summary>
-    public bool IsCpuDetailOpen
+    /// <summary>
+    /// 导航与可见性的唯一真源。
+    ///
+    /// v2.1.2 之前可见性由「XAML 绑定 + 代码后置 ClearValue」共同决定，两者互相顶掉，
+    /// 导致「点外设再回总览」时总览与 CPU 详情同时可见且返回按钮失灵。
+    /// 现在代码后置不再碰 Visibility，这里的属性是唯一出口。
+    /// </summary>
+    private readonly PageRouter _router = new();
+
+    /// <summary>详情页是否展开。收起后每秒采集会自动停下（见 <see cref="Tick"/>）。</summary>
+    public bool IsCpuDetailOpen => _router.IsCpuDetailOpen;
+
+    /// <summary>总览页主体是否可见（详情页展开或切到其它分区时收起）。</summary>
+    public bool IsOverviewVisible => _router.IsOverviewVisible;
+
+    /// <summary>CPU 详情页是否可见。切到外设 / 设置时必须跟着收起。</summary>
+    public bool IsCpuDetailVisible => _router.IsCpuDetailVisible;
+
+    /// <summary>外设页是否可见。</summary>
+    public bool IsPeripheralsVisible => _router.IsPeripheralsVisible;
+
+    /// <summary>设置页是否可见。</summary>
+    public bool IsSettingsVisible => _router.IsSettingsVisible;
+
+    /// <summary>
+    /// 当前页面在导航列表里的下标。窗口被销毁后重建（托盘「显示主界面」）时用它恢复高亮，
+    /// 否则新建的 ListBox 恒为 0，高亮会落在总览上而实际显示的是外设页。
+    /// </summary>
+    public int CurrentNavIndex => PageRouter.ToNavIndex(_router.Section);
+
+    /// <summary>
+    /// 左侧导航切换。返回 false 表示下标非法（界面来的值，不能直接抛）。
+    /// </summary>
+    public bool NavigateTo(int navIndex)
     {
-        get => _isCpuDetailOpen;
-        private set
-        {
-            _isCpuDetailOpen = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(IsOverviewVisible));
-        }
+        var page = PageRouter.FromNavIndex(navIndex);
+        if (page is null) return false;
+
+        if (_router.Navigate(page.Value)) RaisePageVisibilityChanged();
+        return true;
     }
 
-    /// <summary>总览页主体是否可见（详情页展开时收起）。</summary>
-    public bool IsOverviewVisible => !IsCpuDetailOpen;
+    /// <summary>四个可见性属性一起通知。它们总是同时变化，分开通知会漏。</summary>
+    private void RaisePageVisibilityChanged()
+    {
+        OnPropertyChanged(nameof(IsCpuDetailOpen));
+        OnPropertyChanged(nameof(IsOverviewVisible));
+        OnPropertyChanged(nameof(IsCpuDetailVisible));
+        OnPropertyChanged(nameof(IsPeripheralsVisible));
+        OnPropertyChanged(nameof(IsSettingsVisible));
+    }
 
     private CpuDetail? _cpuDetail;
     /// <summary>详情页数据。进入详情页后每秒刷新。</summary>
@@ -615,10 +656,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PeripheralStatus = $"采集异常：{ex.Message}";
         }
 
-        // 系统压力与逐核分组只在详情页展开时采集：
-        // 它们现在只在详情页展示，收起状态下每秒读一遍纯属浪费
+        // 系统压力与逐核分组只在详情页**真的看得见**时采集：
+        // 它们只在详情页展示，收起状态下每秒读一遍纯属浪费
         // （磁盘计数器要给各物理盘各读一次，不是零成本）。
-        if (!IsCpuDetailOpen) return;
+        // 注意用 IsCpuDetailVisible 而不是 IsCpuDetailOpen：用户展开详情后切到外设页，
+        // 详情页已经被藏起来了，这时再采样就是纯浪费。
+        if (!IsCpuDetailVisible) return;
 
         try
         {
