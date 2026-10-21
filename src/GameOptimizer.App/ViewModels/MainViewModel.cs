@@ -8,6 +8,7 @@ using GameOptimizer.Core.Analysis;
 using GameOptimizer.Core.Collection;
 using GameOptimizer.Core.Download;
 using GameOptimizer.Core.GameMode;
+using GameOptimizer.Core.Help;
 using GameOptimizer.Core.Library;
 using GameOptimizer.Core.Models;
 using GameOptimizer.Core.Navigation;
@@ -23,6 +24,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly PeripheralScanner _peripherals = new();
     private readonly MemoryCleanAction _memoryClean = new();
     private readonly DispatcherTimer _timer;
+    private readonly GameVramAssessor _assessor = new();
     private IReadOnlyList<GameEntry> _games = [];
 
     public MainViewModel(PdhSampler sampler, bool samplerReady, GameModeController gameMode)
@@ -88,7 +90,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool SamplerReady { get; }
     public string SamplerStatus { get; }
-    public string HostSummary => $"{Environment.MachineName} · {Environment.ProcessorCount} 线程";
+
+    /// <summary>设置页的使用说明书。界面不再各页散落说明文字，统一从这里读。</summary>
+    public IReadOnlyList<ManualSection> ManualSections => ToolManual.Sections;
 
     /// <summary>
     /// 权限状态：清单里已声明 requireAdministrator，双击即提权。
@@ -331,11 +335,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>仪表中心只显示关键信息，详细数字放在下面一行小字。</summary>
     public string VramText => $"{VramUsedMb:F0} / {VramBudgetMb:F0} MB";
 
+    /// <summary>
+    /// 当前剩余显存 = 可用容量 − 当前占用。游戏库的「是否充足」按它判定，
+    /// 而不是按总容量：总容量再大，被别的程序占满时游戏一样跑不动。
+    /// </summary>
+    public double VramFreeMb => Math.Max(0, VramBudgetMb - VramUsedMb);
+
+    /// <summary>游戏库抬头那一行：告诉用户结论是按哪个数算出来的。</summary>
+    public string VramRemainingText => $"当前剩余 {VramFreeMb:F0} MB / 共 {VramBudgetMb:F0} MB";
+
     private double _vramUsedMb;
     public double VramUsedMb
     {
         get => _vramUsedMb;
-        private set { _vramUsedMb = value; OnPropertyChanged(); OnPropertyChanged(nameof(VramText)); }
+        private set
+        {
+            _vramUsedMb = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(VramText));
+            OnPropertyChanged(nameof(VramFreeMb));
+            OnPropertyChanged(nameof(VramRemainingText));
+        }
     }
 
     private double _ramPercent;
@@ -489,16 +509,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public ObservableCollection<PeripheralItem> Peripherals { get; } = [];
 
-    private string _peripheralSummary = "正在扫描外设…";
-    public string PeripheralSummary { get => _peripheralSummary; private set { _peripheralSummary = value; OnPropertyChanged(); } }
-
     private string _peripheralStatus = "";
     public string PeripheralStatus { get => _peripheralStatus; private set { _peripheralStatus = value; OnPropertyChanged(); } }
-
-    /// <summary>电量读不到时的统一说明，写清楚为什么，避免用户以为是 bug。</summary>
-    public string PeripheralBatteryHint =>
-        "电量来自 Windows 的蓝牙电量上报。走厂商私有协议（罗技 HID++、VXE 私有命令）的无线键鼠，" +
-        "系统不提供统一接口，只能显示「未知」——这不是没读到，而是系统层面拿不到。";
 
     /// <summary>重新扫描外设。插拔设备后手动触发。</summary>
     public void RefreshPeripherals()
@@ -511,19 +523,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (result.Error is not null)
         {
-            PeripheralSummary = "外设扫描失败";
             PeripheralStatus = result.Error;
             return;
         }
 
+        if (result.Devices.Count == 0)
+        {
+            PeripheralStatus = "未发现外设";
+            return;
+        }
+
         var wired = result.Devices.Count(d => d.IsWired);
-        var wireless = result.Devices.Count - wired;
-
-        PeripheralSummary = result.Devices.Count == 0
-            ? "未发现外设"
-            : $"已发现 {result.Devices.Count} 个外设 · 有线 {wired} · 无线 {wireless}";
-
-        PeripheralStatus = $"上次刷新 {DateTime.Now:HH:mm:ss}";
+        PeripheralStatus = $"{result.Devices.Count} 个外设 · 有线 {wired} · 无线 {result.Devices.Count - wired}" +
+                           $" · 上次刷新 {DateTime.Now:HH:mm:ss}";
     }
 
     // ---------- 结束后台白名单（用户可自定义） ----------
@@ -661,6 +673,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             VramUsedMb = frame.CommittedMb;
             VramPercent = VramBudgetMb > 0 ? frame.CommittedMb / VramBudgetMb * 100 : 0;
 
+            // 显存每秒都在变，游戏库的结论必须跟着实时剩余显存重算
+            RefreshGameVerdicts();
+
             RamFreeMb = frame.AvailableRamMb;
             RamPercent = TotalMemoryGb > 0
                 ? RamUsedGb / TotalMemoryGb * 100
@@ -705,17 +720,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void RefreshAllGameStatus()
     {
         Games.Clear();
-        var assessor = new GameVramAssessor();
 
         foreach (var g in _games)
         {
-            // 每款游戏按「这款游戏自己要多少显存」单独判定，
+            // 每款游戏按「这款游戏自己要多少显存」对比本机实时剩余显存单独判定，
             // 而不是拿同一个全局占用率套到所有游戏头上。
-            Games.Add(new GameStatusItem(g, assessor.Assess(g.Name, g.SizeOnDiskGb, Budget)));
+            Games.Add(new GameStatusItem(g, Assess(g)));
         }
 
         OnPropertyChanged(nameof(GameVramSummary));
     }
+
+    /// <summary>每秒重算一次结论。只有结论真的变了才通知界面，避免无谓重绘。</summary>
+    private void RefreshGameVerdicts()
+    {
+        var changed = false;
+        foreach (var item in Games) changed |= item.Apply(Assess(item.Entry));
+
+        if (changed) OnPropertyChanged(nameof(GameVramSummary));
+    }
+
+    private GameVramAssessment Assess(GameEntry game)
+        => _assessor.Assess(game.Name, game.SizeOnDiskGb, Budget, VramFreeMb);
 
     /// <summary>首页顶部的一句话总结：几款充足、几款紧张。</summary>
     public string GameVramSummary
@@ -891,35 +917,63 @@ public sealed class PeripheralItem(PeripheralDevice device)
 }
 
 /// <summary>
-/// 游戏库列表项。判定按「这款游戏 × 当前画质 vs 本机显存」独立计算。
+/// 游戏库列表项。判定按「这款游戏的需求 × 本机实时剩余显存」独立计算，每秒刷新。
 /// </summary>
-public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessment)
+public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessment) : INotifyPropertyChanged
 {
+    private GameVramAssessment _assessment = assessment;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public GameEntry Entry => entry;
     public string Name => entry.Name;
     public string SizeText => $"{entry.SizeOnDiskGb:F1} GB";
     public string Path => entry.InstallPath;
 
-    /// <summary>这款游戏正常配置下需要的显存，与占比。</summary>
-    public string DemandText => assessment.Verdict == GameVramVerdict.Unknown
-        ? $"{assessment.Requirement.SettingsText} 约需 {assessment.Requirement.RequiredMb:F0} MB"
-        : $"{assessment.Requirement.SettingsText} 约需 {assessment.Requirement.RequiredMb:F0} MB" +
-          $" / 本机 {assessment.BudgetMb:F0} MB（占用 {assessment.Ratio:P0}）";
+    /// <summary>这款游戏正常配置下需要的显存与当前剩余。</summary>
+    public string DemandText => _assessment.Verdict == GameVramVerdict.Unknown
+        ? $"{_assessment.Requirement.SettingsText} 约需 {_assessment.Requirement.RequiredMb:F0} MB"
+        : $"{_assessment.Requirement.SettingsText} 约需 {_assessment.Requirement.RequiredMb:F0} MB" +
+          $" / 剩余 {_assessment.FreeMb:F0} MB（占用 {_assessment.Ratio:P0}）";
 
-    public GameVramVerdict Verdict => assessment.Verdict;
+    public GameVramVerdict Verdict => _assessment.Verdict;
 
-    public string VerdictText => assessment.Verdict switch
+    public string VerdictText => _assessment.Verdict switch
     {
         GameVramVerdict.Fine => "显存充足",
         GameVramVerdict.Tight => "显存紧张",
         _ => "无法判定",
     };
 
-    public string VerdictColor => assessment.Verdict switch
+    public string VerdictColor => _assessment.Verdict switch
     {
         GameVramVerdict.Fine => "#34C759",
         GameVramVerdict.Tight => "#FF9F0A",
         _ => "#83868D",
     };
+
+    /// <summary>
+    /// 用新结论刷新。返回结论是否变化（供上层决定要不要更新汇总）。
+    /// 需求、剩余这类数字每秒都在动，只有文本真的变了才通知，避免整表重绘。
+    /// </summary>
+    public bool Apply(GameVramAssessment next)
+    {
+        var verdictChanged = next.Verdict != _assessment.Verdict;
+        var demandBefore = DemandText;
+
+        _assessment = next;
+
+        if (verdictChanged)
+        {
+            PropertyChanged?.Invoke(this, new(nameof(Verdict)));
+            PropertyChanged?.Invoke(this, new(nameof(VerdictText)));
+            PropertyChanged?.Invoke(this, new(nameof(VerdictColor)));
+        }
+
+        if (DemandText != demandBefore) PropertyChanged?.Invoke(this, new(nameof(DemandText)));
+
+        return verdictChanged;
+    }
 }
 
 /// <summary>白名单中的一个可勾选进程名。</summary>

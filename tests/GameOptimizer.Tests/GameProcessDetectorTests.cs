@@ -35,16 +35,17 @@ public class GameProcessDetectorTests
     [Fact]
     public void 应能检测到当前正在运行的测试宿主进程()
     {
-        // 用测试进程自己当"游戏"：把它的 exe 当作已知游戏路径
+        // 用测试进程自己当"游戏"：把它的 exe 当作已知游戏路径。
+        // 不断言「只扫到一个」：测试宿主在某些运行方式下是共享的 dotnet.exe，
+        // 同名的宿主进程可能不止一个，那不是检测逻辑的问题。
         var self = Environment.ProcessPath;
         self.Should().NotBeNull();
 
         var games = new (string Name, string? Exe)[] { ("测试宿主", self) };
         var running = GameProcessDetector.Detect(games);
 
-        running.Should().ContainSingle();
-        running[0].DisplayName.Should().Be("测试宿主");
-        running[0].ProcessId.Should().Be(Environment.ProcessId);
+        running.Should().Contain(r => r.ProcessId == Environment.ProcessId);
+        running.First(r => r.ProcessId == Environment.ProcessId).DisplayName.Should().Be("测试宿主");
     }
 
     [Fact]
@@ -64,7 +65,7 @@ public class GameProcessDetectorTests
         var upper = self.ToUpperInvariant();
 
         var running = GameProcessDetector.Detect([("大写路径", upper)]);
-        running.Should().ContainSingle();
+        running.Should().Contain(r => r.ProcessId == Environment.ProcessId);
     }
 
     [Fact]

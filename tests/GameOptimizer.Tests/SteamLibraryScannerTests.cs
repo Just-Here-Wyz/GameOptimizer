@@ -133,4 +133,47 @@ public class SteamLibraryScannerTests
 
         games.Should().NotContain(g => g.Name.Contains("ChainedTogether", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void 路径应统一盘符大写与反斜杠()
+    {
+        // 注册表里 SteamPath 实测写作 d:/steam，不规范化会拼出 d:/steam\steamapps\... 这种混排路径
+        SteamLibraryScanner.NormalizePath("d:/steam").Should().Be(@"D:\steam");
+        SteamLibraryScanner.NormalizePath(@"e:\SteamLibrary\").Should().Be(@"E:\SteamLibrary");
+        SteamLibraryScanner.NormalizePath(@"D:\WeGameApps\rail_apps").Should().Be(@"D:\WeGameApps\rail_apps");
+    }
+
+    [Fact]
+    public void 路径大小写应还原成磁盘上的真实写法()
+    {
+        // 本机实测：注册表给 d:/steam，磁盘上是 D:\STEAM
+        var root = Path.Combine(Path.GetTempPath(), "go-test-" + Guid.NewGuid().ToString("N"));
+        var steam = Path.Combine(root, "STEAM");
+        Directory.CreateDirectory(Path.Combine(steam, "steamapps"));
+        try
+        {
+            var lower = Path.Combine(root, "steam").Replace('\\', '/');
+            var resolved = SteamLibraryScanner.ResolveRealCase(lower);
+
+            resolved.Should().EndWith(@"STEAM");
+            resolved.Should().NotContain("/");
+            Directory.Exists(resolved).Should().BeTrue();
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void 真实扫描出的游戏路径格式应一致()
+    {
+        // 界面把 InstallPath 直接显示出来：三款游戏的路径必须同一种格式
+        // （盘符大写 + 反斜杠），否则「永劫无间」那一行会与另两款明显不一致
+        var games = NonGameFilter.Apply(GameLibrary.ScanAll());
+
+        foreach (var g in games)
+        {
+            g.InstallPath.Should().NotContain("/", $"{g.Name} 的路径不能让正斜杠混进来");
+            g.InstallPath[0].Should().Be(char.ToUpperInvariant(g.InstallPath[0]), $"{g.Name} 的盘符应大写");
+            g.InstallPath[1].Should().Be(':');
+        }
+    }
 }

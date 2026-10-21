@@ -29,9 +29,11 @@ public sealed class SteamLibraryScanner : IGameLibraryScanner
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var lib in libraries)
         {
-            var normalized = NormalizePath(lib);
-            if (!seen.Add(normalized)) continue;
-            var appsDir = Path.Combine(lib, "steamapps");
+            // 显示用路径必须与磁盘一致：注册表给的是 d:/steam，直接拼出来会是
+            // "d:/steam\steamapps\common\..."，与 WeGame 那两项的格式对不上。
+            var normalized = ResolveRealCase(lib);
+            if (!seen.Add(NormalizePath(normalized))) continue;
+            var appsDir = Path.Combine(normalized, "steamapps");
             if (!Directory.Exists(appsDir)) continue;
 
             // manifest 路径 → GameEntry，用于兜底扫描时判断目录是否已被清单收录
@@ -39,7 +41,7 @@ public sealed class SteamLibraryScanner : IGameLibraryScanner
 
             foreach (var acf in Directory.EnumerateFiles(appsDir, "appmanifest_*.acf"))
             {
-                var entry = ParseManifest(acf, lib);
+                var entry = ParseManifest(acf, normalized);
                 if (entry is null) continue;
                 byInstallPath.Add(NormalizePath(entry.InstallPath));
                 results.Add(entry);
@@ -109,7 +111,46 @@ public sealed class SteamLibraryScanner : IGameLibraryScanner
     /// vdf 里写作 d:/steam，注册表里写作 D:\Steam，两者是同一目录。
     /// </summary>
     internal static string NormalizePath(string path)
-        => path.Replace('/', '\\').TrimEnd('\\');
+    {
+        if (string.IsNullOrWhiteSpace(path)) return path ?? "";
+
+        var p = path.Replace('/', '\\').TrimEnd('\\');
+        // 盘符必须大写：界面上的三个游戏路径要长得一样，d:\steam 与 D:\WeGameApps 并列很突兀
+        return p.Length >= 2 && p[1] == ':' ? char.ToUpperInvariant(p[0]) + p[1..] : p;
+    }
+
+    /// <summary>
+    /// 把路径逐段还原成磁盘上的真实大小写。
+    ///
+    /// 注册表里 SteamPath 实测为 "d:/steam"，而磁盘上是 D:\STEAM——
+    /// 直接显示注册表值会让「永劫无间」的路径与另两款游戏的路径格式对不上。
+    /// 每段只枚举一次同级目录，库根目录数量有限，开销可忽略。
+    /// </summary>
+    internal static string ResolveRealCase(string path)
+    {
+        var normalized = NormalizePath(path);
+        if (normalized.Length < 3 || normalized[1] != ':') return normalized;
+
+        var current = normalized[..3];
+        foreach (var segment in normalized[3..].Split('\\', StringSplitOptions.RemoveEmptyEntries))
+            current = MatchExistingChild(current, segment) ?? Path.Combine(current, segment);
+
+        return current;
+    }
+
+    /// <summary>在父目录里找同名（忽略大小写）的子目录，找不到返回 null，保留原名。</summary>
+    private static string? MatchExistingChild(string parent, string name)
+    {
+        try
+        {
+            if (!Directory.Exists(parent)) return null;
+            foreach (var dir in Directory.EnumerateDirectories(parent))
+                if (string.Equals(Path.GetFileName(dir), name, StringComparison.OrdinalIgnoreCase))
+                    return dir;
+        }
+        catch { /* 无权限的目录按原名继续，不影响其余段落 */ }
+        return null;
+    }
 
     /// <summary>从注册表读 Steam 安装路径，读不到再试常见位置。</summary>
     public static string? DetectSteamRoot()

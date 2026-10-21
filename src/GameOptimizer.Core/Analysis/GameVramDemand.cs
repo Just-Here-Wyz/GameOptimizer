@@ -68,8 +68,8 @@ public sealed record VramBudget(double BudgetMb, bool IsIntegrated, bool IsMeasu
 public static class GameVramDemand
 {
     /// <summary>
-    /// 需求占预算 ≥ 这个比例判「显存紧张」。
-    /// 留 15% 给桌面、浏览器、录屏等系统占用——显存吃满后驱动会向内存换页，直接表现为掉帧。
+    /// 需求占「当前剩余显存」≥ 这个比例判「显存紧张」。
+    /// 留 15% 给游戏运行中的显存增长——显存吃满后驱动会向内存换页，直接表现为掉帧。
     /// </summary>
     public const double TightRatio = 0.85;
 

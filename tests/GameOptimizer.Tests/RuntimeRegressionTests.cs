@@ -13,8 +13,9 @@ public class RuntimeRegressionTests
     [Fact]
     public void 正斜杠与反斜杠路径应视为同一个库()
     {
-        // 实测：注册表给 D:\STEAM，vdf 给 d:/steam，未规范化会导致每个游戏被扫描两次
-        SteamLibraryScanner.NormalizePath(@"d:/steam").Should().Be(@"d:\steam");
+        // 实测：注册表给 d:/steam，vdf 给 D:\STEAM，未规范化会导致每个游戏被扫描两次。
+        // 规范化同时统一盘符大小写：界面直接显示这个路径，d:\steam 与 D:\WeGameApps 并列很突兀。
+        SteamLibraryScanner.NormalizePath(@"d:/steam").Should().Be(@"D:\steam");
         SteamLibraryScanner.NormalizePath(@"D:\STEAM").Should().Be(@"D:\STEAM");
     }
 

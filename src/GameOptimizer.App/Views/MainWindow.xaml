@@ -166,10 +166,8 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="总览" Style="{StaticResource H1}"/>
-                                <TextBlock Text="{Binding HostSummary}" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
-                            </StackPanel>
+                            <TextBlock Grid.Column="0" Text="总览" Style="{StaticResource H1}"
+                                       VerticalAlignment="Center"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding GameVramSummary}" Style="{StaticResource Muted}"
                                            VerticalAlignment="Center" Margin="0,0,12,0"/>
@@ -258,26 +256,6 @@
                                                    HorizontalAlignment="Center" Margin="0,10,0,0"/>
                                     </StackPanel>
                                 </Border>
-
-                                <!-- 颜色图例：让用户知道四档颜色怎么读 -->
-                                <Border Style="{StaticResource Card}" Padding="16,12">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="占用率配色" Style="{StaticResource Muted}" VerticalAlignment="Center"/>
-                                        <Border Width="10" Height="10" CornerRadius="2" Background="#FF34C759"
-                                                Margin="16,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="0~30% 充裕" Style="{StaticResource Faint}" VerticalAlignment="Center"/>
-                                        <Border Width="10" Height="10" CornerRadius="2" Background="#FF4C8DFF"
-                                                Margin="14,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="31~60% 正常" Style="{StaticResource Faint}" VerticalAlignment="Center"/>
-                                        <Border Width="10" Height="10" CornerRadius="2" Background="#FFFF9F0A"
-                                                Margin="14,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="61~80% 偏高" Style="{StaticResource Faint}" VerticalAlignment="Center"/>
-                                        <Border Width="10" Height="10" CornerRadius="2" Background="#FFFF453A"
-                                                Margin="14,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="81~100% 吃紧" Style="{StaticResource Faint}" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </Border>
-
 
                                 <!-- 游戏模式 -->
                                 <Border Style="{StaticResource Card}">
@@ -379,7 +357,7 @@
                                         <TextBlock Text="已安装游戏" FontWeight="SemiBold" FontSize="14"/>
                                         <TextBlock Text="{Binding GameLibrarySummary}" Style="{StaticResource Muted}"
                                                    Margin="0,3,0,10"/>
-                                        <TextBlock Text="{Binding VramBudgetText}" Style="{StaticResource Faint}"
+                                        <TextBlock Text="{Binding VramRemainingText}" Style="{StaticResource Faint}"
                                                    Margin="0,0,0,8"/>
 
                                         <ItemsControl ItemsSource="{Binding Games}">
@@ -436,11 +414,8 @@
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="0" Content="← 返回" Command="{Binding CloseCpuDetailCommand}"
                                     VerticalAlignment="Center" Margin="0,0,14,0"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="CPU 详情" Style="{StaticResource H1}"/>
-                                <TextBlock Text="{Binding CpuDetail.TopologyText}" Style="{StaticResource Muted}"
-                                           Margin="0,3,0,0"/>
-                            </StackPanel>
+                            <TextBlock Grid.Column="1" Text="CPU 详情" Style="{StaticResource H1}"
+                                       VerticalAlignment="Center"/>
                         </Grid>
 
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,24">
@@ -452,17 +427,14 @@
                                         <TextBlock Text="{Binding CpuDetail.VerdictText}" FontSize="15"
                                                    FontWeight="SemiBold" Foreground="{StaticResource Accent}"
                                                    TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                        <TextBlock Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0"
-                                                   Text="大核（P-core）跑游戏主线程，它满了才需要降画质；小核（E-core）被后台占满通常不影响帧率。"/>
                                     </StackPanel>
                                 </Border>
 
-                                <!-- 汇总：四个数字并排，说明各自口径 -->
+                                <!-- 汇总：四个数字并排 -->
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
-                                        <TextBlock Text="汇总" FontWeight="SemiBold" FontSize="14"/>
-                                        <TextBlock Style="{StaticResource Faint}" Margin="0,3,0,10" TextWrapping="Wrap"
-                                                   Text="「P 核峰值」和「总 CPU」经常差很多，这是正常的：前者是最高的一颗核，后者是全部核的平均。"/>
+                                        <TextBlock Text="汇总" FontWeight="SemiBold" FontSize="14"
+                                                   Margin="0,0,0,10"/>
                                         <UniformGrid Columns="4">
                                             <StackPanel HorizontalAlignment="Center">
                                                 <TextBlock Text="{Binding CpuDetail.PerformancePeakPercent, StringFormat={}{0:F0}%}"
@@ -562,8 +534,6 @@
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-                                        <TextBlock Style="{StaticResource Faint}" Margin="0,8,0,0"
-                                                   Text="同一物理核的两个超线程显示为两根条（序号相邻）。"/>
                                     </StackPanel>
                                 </Border>
 
@@ -623,10 +593,8 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="外设" Style="{StaticResource H1}"/>
-                                <TextBlock Text="{Binding PeripheralSummary}" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
-                            </StackPanel>
+                            <TextBlock Grid.Column="0" Text="外设" Style="{StaticResource H1}"
+                                       VerticalAlignment="Center"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding PeripheralStatus}" Style="{StaticResource Faint}"
                                            VerticalAlignment="Center" Margin="0,0,12,0"/>
@@ -706,14 +674,6 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
-                                <Border Style="{StaticResource Card}" Padding="16,12">
-                                    <StackPanel>
-                                        <TextBlock Text="关于电量" FontWeight="SemiBold" FontSize="13"/>
-                                        <TextBlock Text="{Binding PeripheralBatteryHint}" Style="{StaticResource Faint}"
-                                                   TextWrapping="Wrap" Margin="0,6,0,0" MaxWidth="760"
-                                                   HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                </Border>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
@@ -737,13 +697,33 @@
                             <StackPanel>
                                 <TextBlock Text="设置" Style="{StaticResource H1}" Margin="0,0,0,16"/>
 
+                                <!-- 使用说明书：界面各页不再挂说明文字，统一到这里查 -->
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
-                                        <TextBlock Text="关于本工具" FontWeight="SemiBold" FontSize="14"/>
-                                        <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                                   Text="面向「显存不足 / 卡顿掉帧」的 Windows 桌面诊断工具。不做「一键提速」的承诺，而是把硬件占用如实摆出来，并提供可回滚的游戏模式。"/>
+                                        <TextBlock Text="使用说明书" FontWeight="SemiBold" FontSize="14"
+                                                   Margin="0,0,0,12"/>
+
+                                        <ItemsControl ItemsSource="{Binding ManualSections}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="0,0,0,14" MaxWidth="820"
+                                                                HorizontalAlignment="Left">
+                                                        <TextBlock Text="{Binding Title}" FontSize="13"
+                                                                   FontWeight="SemiBold"/>
+                                                        <TextBlock Text="{Binding Body}" Style="{StaticResource Muted}"
+                                                                   TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="版本" FontWeight="SemiBold" FontSize="14"/>
                                         <TextBlock x:Name="VersionText" Style="{StaticResource Faint}"
-                                                   Margin="0,10,0,0"/>
+                                                   Margin="0,6,0,0"/>
                                     </StackPanel>
                                 </Border>
 
