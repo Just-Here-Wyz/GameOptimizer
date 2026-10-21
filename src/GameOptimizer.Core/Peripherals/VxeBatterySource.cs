@@ -17,10 +17,28 @@ public sealed class VxeBatterySource
 
     /// <summary>SetOutputReport 让设备进入应答状态，WriteFile 触发查询，ReadFile 取 17 字节响应。</summary>
     private static (int? Level, bool? Charging)? Query()
-    {
-        var path = FindCompxPath();
-        if (path is null) return null;
+        => FirstAnswering(FindCompxPaths(), QueryPath);
 
+    /// <summary>
+    /// 按顺序尝试每个候选接口，返回第一个给出结果的。
+    ///
+    /// 抽成纯函数（接受探针委托）是为了能单测「第一台打不开」这条路径——
+    /// 那段逻辑依赖真实 HID 设备，不抽出来就只能靠实机碰运气。
+    /// </summary>
+    internal static T? FirstAnswering<T>(IReadOnlyList<string> paths, Func<string, T?> probe) where T : struct
+    {
+        foreach (var path in paths)
+        {
+            var result = probe(path);
+            if (result is not null) return result;
+        }
+
+        return null;
+    }
+
+    /// <summary>对单个接口路径做一次查询；设备不应答时返回 null，交给下一个候选。</summary>
+    private static (int? Level, bool? Charging)? QueryPath(string path)
+    {
         var handle = CreateFile(path, 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
         if (handle == new IntPtr(-1)) return null;
 
@@ -96,17 +114,21 @@ public sealed class VxeBatterySource
            && !string.IsNullOrWhiteSpace(compxVid)
            && instanceHint.Contains("vid_" + compxVid, StringComparison.OrdinalIgnoreCase);
 
-    internal static string? FindCompxVid()
-        => ExtractVid(FindCompxPath());
+    internal static string? FindCompxVid() => FindCompxPaths().Select(ExtractVid).FirstOrDefault(v => v is not null);
 
-    /// <summary>FF02 厂商集合接口路径（hid#vid_...&mi_01&col05），优先非键盘（带 \kbd 的是键盘）。</summary>
-    internal static string? FindCompxPath()
+    /// <summary>
+    /// 所有 FF02 厂商集合（hid#vid_...&amp;mi_01&amp;col05）接口路径，**非键盘优先**。
+    ///
+    /// 返回全部候选而不是单个：实测会同时存在多台同 VID 设备（真鼠标 + 残留枚举项），
+    /// 谁排第一不保证能应答，调用方必须逐个试。带 <c>\kbd</c> 的是键盘集合，排在后面。
+    /// </summary>
+    internal static IReadOnlyList<string> FindCompxPaths()
     {
         var result = new List<string>();
 
         HidD_GetHidGuid(out var guid);
         var set = SetupDiGetClassDevs(ref guid, null, IntPtr.Zero, 0x10);
-        if (set == IntPtr.Zero || set == new IntPtr(-1)) return null;
+        if (set == IntPtr.Zero || set == new IntPtr(-1)) return result;
 
         try
         {
@@ -139,8 +161,10 @@ public sealed class VxeBatterySource
             SetupDiDestroyDeviceInfoList(set);
         }
 
-        return result.FirstOrDefault(p => !p.Contains("\\kbd", StringComparison.OrdinalIgnoreCase))
-               ?? result.FirstOrDefault();
+        // 稳定排序：鼠标集合在前、键盘集合在后，让「第一台能应答的」尽量是鼠标
+        return [.. result
+            .OrderBy(p => p.Contains("\\kbd", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)];
     }
 
     [DllImport("hid.dll", SetLastError = true)]

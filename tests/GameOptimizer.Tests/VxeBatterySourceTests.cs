@@ -120,10 +120,75 @@ public class VxeBatterySourceTests
     [Fact]
     public void 真实设备应能读到电量()
     {
-        // 本机 VXE R1 挂在 FF02 集合上，实测返回 65%。
+        // 本机 VXE R1 挂在 FF02 集合上，实测返回 65%（v2.1.3 实测 0x50 = 80%）。
         // 换机器（没有 COMPX 鼠标）时返回 null，不算失败。
         var level = VxeBatterySource.ReadBatteryPercent();
         if (level is not null)
             level.Should().BeInRange(0, 100);
+    }
+
+    /// <summary>
+    /// v2.1.3 事故：同时存在两台 Compx 设备时，电量从「能读」退化成「未知」。
+    ///
+    /// 实测环境：pid_f58a（真鼠标，应答 0x50=80%）与 pid_f58c（残留枚举项，
+    /// CreateFile 报 ERROR_FILE_NOT_FOUND=2）都带 col05，而枚举顺序把 f58c 排在前面。
+    /// 旧实现只取 FirstOrDefault，恰好选中打不开的那台，整个读取返回 null。
+    /// </summary>
+    [Fact]
+    public void 第一台设备打不开时应继续试下一台()
+    {
+        // 第一台返回 null 模拟「CreateFile 失败」，第二台给出真实读数
+        var tried = new List<string>();
+        var paths = new[] { @"\\?\hid#vid_3554&pid_f58c&col05", @"\\?\hid#vid_3554&pid_f58a&col05" };
+
+        var result = VxeBatterySource.FirstAnswering(paths, p =>
+        {
+            tried.Add(p);
+            return p.Contains("f58a") ? 80 : (int?)null;
+        });
+
+        result.Should().Be(80, "旧实现只问第一台就放弃，会返回 null 让界面显示「未知」");
+        tried.Should().HaveCount(2, "第一台失败后必须继续试第二台");
+    }
+
+    [Fact]
+    public void 全部设备都不应答时应返回null而不是报错()
+    {
+        var tried = new List<string>();
+        var result = VxeBatterySource.FirstAnswering(
+            new[] { "a", "b", "c" },
+            p => { tried.Add(p); return (int?)null; });
+
+        result.Should().BeNull("读不到就是读不到，不能编造数字");
+        tried.Should().HaveCount(3, "所有候选都应试过");
+    }
+
+    [Fact]
+    public void 第一台就应答时不应再去打扰后面的设备()
+    {
+        // 每次查询要 sleep 330ms，无谓的探测会让外设页明显变慢
+        var tried = new List<string>();
+        var result = VxeBatterySource.FirstAnswering(
+            new[] { "a", "b" },
+            p => { tried.Add(p); return (int?)80; });
+
+        result.Should().Be(80);
+        tried.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void 键盘集合应排在鼠标集合之后()
+    {
+        var paths = VxeBatterySource.FindCompxPaths();
+        if (paths.Count < 2) return;
+
+        // 带 \kbd 的是键盘集合，排后面可以少试一次无效设备
+        var list = paths.ToList();
+        var firstKbdIndex = list.FindIndex(p => p.Contains("\\kbd", StringComparison.OrdinalIgnoreCase));
+        if (firstKbdIndex < 0) return;
+
+        list.Skip(firstKbdIndex)
+            .Should().OnlyContain(p => p.Contains("\\kbd", StringComparison.OrdinalIgnoreCase),
+                "非键盘集合必须排在键盘集合之前");
     }
 }
