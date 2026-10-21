@@ -1,4 +1,4 @@
-namespace GameOptimizer.Core.Help;
+namespace GameOptimizer.Core.Models;
 
 /// <summary>使用说明书中的一节：一个标题 + 一段正文（正文可含换行）。</summary>
 public sealed record ManualSection(string Title, string Body);
@@ -6,6 +6,9 @@ public sealed record ManualSection(string Title, string Body);
 /// <summary>
 /// 工具使用说明书。界面上的说明性小字统一收进这里，由设置页集中展示，
 /// 保证「怎么用」只有一处可查，不散落在各个页面的副标题里。
+///
+/// 放在 Models 而不是另开 Help 目录：它是一份静态数据，不含逻辑，
+/// 归到既有的模型层即可，不必为一份文案在 Core 下新增顶层目录。
 /// </summary>
 public static class ToolManual
 {

@@ -8,7 +8,6 @@ using GameOptimizer.Core.Analysis;
 using GameOptimizer.Core.Collection;
 using GameOptimizer.Core.Download;
 using GameOptimizer.Core.GameMode;
-using GameOptimizer.Core.Help;
 using GameOptimizer.Core.Library;
 using GameOptimizer.Core.Models;
 using GameOptimizer.Core.Navigation;

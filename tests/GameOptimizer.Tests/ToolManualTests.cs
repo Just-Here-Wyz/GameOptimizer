@@ -1,7 +1,7 @@
 namespace GameOptimizer.Tests;
 
 using FluentAssertions;
-using GameOptimizer.Core.Help;
+using GameOptimizer.Core.Models;
 
 /// <summary>
 /// 设置页「使用说明书」的内容用例。
