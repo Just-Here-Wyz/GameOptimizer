@@ -29,7 +29,37 @@ public class PageRouterTests
         r.IsCpuDetailOpen.Should().BeFalse();
         r.IsCpuDetailVisible.Should().BeFalse();
         r.IsPeripheralsVisible.Should().BeFalse();
+        r.IsDownloadVisible.Should().BeFalse();
         r.IsSettingsVisible.Should().BeFalse();
+    }
+
+    [Fact]
+    public void 下载页与其它页面互斥()
+    {
+        // v2.2.0 新增下载页。页面变多了，「恰好一个可见」这条不变式更要靠穷举守住，
+        // 否则下载页会和设置页一起显示（历史上真的发生过同类叠页事故）。
+        var r = new PageRouter();
+
+        r.Navigate(AppPage.Download).Should().BeTrue();
+
+        r.IsDownloadVisible.Should().BeTrue();
+        r.IsOverviewVisible.Should().BeFalse();
+        r.IsPeripheralsVisible.Should().BeFalse();
+        r.IsSettingsVisible.Should().BeFalse();
+        r.IsCpuDetailVisible.Should().BeFalse();
+    }
+
+    [Fact]
+    public void 下载页不会占用CPU详情页的区域()
+    {
+        var r = new PageRouter();
+        r.OpenCpuDetail();
+
+        r.Navigate(AppPage.Download);
+
+        r.IsDownloadVisible.Should().BeTrue();
+        r.IsCpuDetailVisible.Should().BeFalse("详情页必须给下载页让位");
+        r.IsOverviewVisible.Should().BeFalse();
     }
 
     [Fact]
@@ -151,6 +181,7 @@ public class PageRouterTests
                 r.IsOverviewVisible,
                 r.IsCpuDetailVisible,
                 r.IsPeripheralsVisible,
+                r.IsDownloadVisible,
                 r.IsSettingsVisible,
             }.Count(v => v);
 
@@ -162,7 +193,8 @@ public class PageRouterTests
     [Theory]
     [InlineData(0, AppPage.Overview)]
     [InlineData(1, AppPage.Peripherals)]
-    [InlineData(2, AppPage.Settings)]
+    [InlineData(2, AppPage.Download)]
+    [InlineData(3, AppPage.Settings)]
     public void 导航下标应映射到对应分区(int index, AppPage expected)
     {
         PageRouter.FromNavIndex(index).Should().Be(expected);
@@ -170,7 +202,7 @@ public class PageRouterTests
 
     [Theory]
     [InlineData(-1)]
-    [InlineData(3)]
+    [InlineData(4)]
     [InlineData(99)]
     public void 越界下标应返回空而不是抛异常(int index)
     {
@@ -181,11 +213,21 @@ public class PageRouterTests
     [Theory]
     [InlineData(AppPage.Overview, 0)]
     [InlineData(AppPage.Peripherals, 1)]
-    [InlineData(AppPage.Settings, 2)]
+    [InlineData(AppPage.Download, 2)]
+    [InlineData(AppPage.Settings, 3)]
     public void 分区应能反查回导航下标(AppPage page, int expected)
     {
         // 窗口被销毁后重建（托盘「显示主界面」）要靠它恢复高亮
         PageRouter.ToNavIndex(page).Should().Be(expected);
+    }
+
+    [Fact]
+    public void 下载导航项应排在设置之上()
+    {
+        // 用户明确要求：下载项在设置项**上方**。
+        // 这条用例守的是「将来有人把设置挪回索引 2」时立刻失败。
+        PageRouter.ToNavIndex(AppPage.Download).Should().BeLessThan(
+            PageRouter.ToNavIndex(AppPage.Settings));
     }
 
     [Fact]
@@ -196,6 +238,38 @@ public class PageRouterTests
         {
             PageRouter.FromNavIndex(PageRouter.ToNavIndex(page)).Should().Be(page);
         }
+    }
+
+    /// <summary>
+    /// 源码级防错位：MainWindow.xaml 里导航项的顺序必须与 <see cref="PageRouter"/> 一致。
+    ///
+    /// 两处顺序一旦写岔，表现是「点下载跳到设置页」——而且编译期完全查不出来，
+    /// 只能靠人点一遍。这里直接读 XAML 把顺序钉死。
+    /// </summary>
+    [Fact]
+    public void 导航项顺序必须与状态机一致()
+    {
+        var xaml = File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "GameOptimizer.App", "Views", "MainWindow.xaml"));
+
+        var items = System.Text.RegularExpressions.Regex
+            .Matches(xaml, @"<ListBoxItem\s+Content=""(?<name>[^""]+)""")
+            .Select(m => m.Groups["name"].Value)
+            .ToList();
+
+        var expected = Enum.GetValues<AppPage>()
+            .OrderBy(PageRouter.ToNavIndex)
+            .Select(page => page switch
+            {
+                AppPage.Overview => "总览",
+                AppPage.Peripherals => "外设",
+                AppPage.Download => "下载",
+                AppPage.Settings => "设置",
+                _ => "",
+            })
+            .ToList();
+
+        items.Should().Equal(expected, "导航项必须按总览 / 外设 / 下载 / 设置排列，且与 PageRouter 下标一一对应");
     }
 
     /// <summary>

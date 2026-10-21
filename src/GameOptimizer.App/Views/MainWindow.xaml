@@ -139,6 +139,8 @@
                                  Margin="0,10,0,0">
                             <ListBoxItem Content="总览"/>
                             <ListBoxItem Content="外设"/>
+                            <!-- 下载（v2.2.0）：排在「设置」之上，样式与其余导航项完全共用 NavItem -->
+                            <ListBoxItem Content="下载"/>
                             <ListBoxItem Content="设置"/>
                         </ListBox>
 
@@ -714,6 +716,18 @@
                                 </Border>
                             </StackPanel>
                         </ScrollViewer>
+                    </Grid>
+
+                    <!--
+                      下载页（v2.2.0）
+                      导航项「下载」切过来。页面本身拆成独立的 DownloadPage 控件：
+                      下载页比其余页面复杂（新建栏 + 分组列表 + 统计栏），
+                      放进 MainWindow 会让这个已经 750 行的文件继续膨胀。
+                      可见性仍由 PageRouter 绑定下来，不在这里写 Visibility。
+                    -->
+                    <Grid x:Name="DownloadPageHost"
+                          Visibility="{Binding IsDownloadVisible, Converter={StaticResource BoolToVisibility}}">
+                        <views:DownloadPage DataContext="{Binding Downloads}"/>
                     </Grid>
 
                     <!-- 设置页：目前只放版本与说明，保持三页导航结构完整 -->

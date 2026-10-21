@@ -1,13 +1,17 @@
 namespace GameOptimizer.Core.Navigation;
 
 /// <summary>
-/// 左侧导航的三个分区。CPU 详情页不是导航项，它寄居在「总览」分区里。
+/// 左侧导航的四个分区。CPU 详情页不是导航项，它寄居在「总览」分区里。
 /// </summary>
 public enum AppPage
 {
     Overview = 0,
     Peripherals = 1,
-    Settings = 2,
+
+    /// <summary>下载器（v2.2.0）。导航下标排在「设置」之前。</summary>
+    Download = 2,
+
+    Settings = 3,
 }
 
 /// <summary>
@@ -45,6 +49,9 @@ public sealed class PageRouter
 
     public bool IsPeripheralsVisible => Section == AppPage.Peripherals;
 
+    /// <summary>下载页（v2.2.0）。</summary>
+    public bool IsDownloadVisible => Section == AppPage.Download;
+
     public bool IsSettingsVisible => Section == AppPage.Settings;
 
     /// <summary>切到某个导航分区。返回是否真的发生了变化（false 时不必刷新界面）。</summary>
@@ -76,12 +83,17 @@ public sealed class PageRouter
         return true;
     }
 
-    /// <summary>导航列表下标 → 分区。越界返回 null，不抛异常（下标来自界面）。</summary>
+    /// <summary>
+    /// 导航列表下标 → 分区。越界返回 null，不抛异常（下标来自界面）。
+    ///
+    /// 下标顺序与界面「总览 / 外设 / 下载 / 设置」一一对应，下载排在设置**之前**。
+    /// </summary>
     public static AppPage? FromNavIndex(int index) => index switch
     {
         0 => AppPage.Overview,
         1 => AppPage.Peripherals,
-        2 => AppPage.Settings,
+        2 => AppPage.Download,
+        3 => AppPage.Settings,
         _ => null,
     };
 
@@ -92,7 +104,8 @@ public sealed class PageRouter
     public static int ToNavIndex(AppPage page) => page switch
     {
         AppPage.Peripherals => 1,
-        AppPage.Settings => 2,
+        AppPage.Download => 2,
+        AppPage.Settings => 3,
         _ => 0,
     };
 }

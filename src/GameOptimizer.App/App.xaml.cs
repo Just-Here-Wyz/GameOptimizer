@@ -21,6 +21,25 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 离屏渲染模式（仅调试用，见 OffscreenRenderer）：把真实页面渲染成 PNG 后立刻退出。
+        // 不建窗口、不建托盘、不碰游戏模式，因此不会在用户机器上留下任何痕迹。
+        if (e.Args.Length >= 2 && e.Args[0] == "--render")
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            try
+            {
+                var output = OffscreenRenderer.RenderAll(e.Args[1]);
+                Console.WriteLine(output);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("RENDER FAILED: " + ex);
+            }
+
+            Shutdown();
+            return;
+        }
+
         // 托盘运行：关窗口 = 隐藏到托盘，只有托盘菜单「退出」才真正结束。
         // 因此不能用 OnMainWindowClose——主窗口一关进程就没了。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;

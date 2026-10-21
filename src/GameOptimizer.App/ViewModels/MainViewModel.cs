@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using GameOptimizer.Core.Analysis;
 using GameOptimizer.Core.Collection;
+using GameOptimizer.Core.Download;
 using GameOptimizer.Core.GameMode;
 using GameOptimizer.Core.Library;
 using GameOptimizer.Core.Models;
@@ -31,6 +32,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SamplerReady = samplerReady;
         SamplerStatus = samplerReady ? "采集就绪" : $"采集不可用：{sampler.LastError}";
 
+        // 下载器（v2.2.0）：服务本身在 Core，这里只建一个实例并交给下载页的 ViewModel。
+        // 下载与采集互不影响：上传/下载不动 PDH 计数器，共用事件循环也不会互相拖慢。
+        Downloads = new DownloadViewModel(new DownloadService(), Dispatcher.CurrentDispatcher)
+        {
+            DirectoryPicker = DirectoryPicker.AskForFolder,
+            OpenFolderAction = item => DirectoryPicker.OpenInExplorer(item.FilePath),
+        };
+        _ = Downloads.LoadAsync();
         // 内存分母用标称容量：实测 16GB 条上报 15.73GB，用户心智里是 16
         TotalMemoryGb = SystemMemoryInfo.NominalGb;
 
@@ -101,6 +110,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public ObservableCollection<GameStatusItem> Games { get; } = [];
 
+    /// <summary>下载页（v2.2.0）。委托导航项「下载」切过去。</summary>
+    public DownloadViewModel Downloads { get; }
+
     public RelayCommand ScanGamesCommand { get; }
     public RelayCommand ToggleGameModeCommand { get; }
     public RelayCommand ToggleWhitelistPanelCommand { get; }
@@ -111,7 +123,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>首页内存仪表盘旁的「优化」按钮：触发 <see cref="MemoryCleanAction"/>。</summary>
     public RelayCommand OptimizeMemoryCommand { get; }
-
     /// <summary>点击 CPU 仪表进入详情页。</summary>
     public RelayCommand OpenCpuDetailCommand { get; }
 
@@ -141,6 +152,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>外设页是否可见。</summary>
     public bool IsPeripheralsVisible => _router.IsPeripheralsVisible;
 
+    /// <summary>下载页是否可见（v2.2.0）。</summary>
+    public bool IsDownloadVisible => _router.IsDownloadVisible;
+
     /// <summary>设置页是否可见。</summary>
     public bool IsSettingsVisible => _router.IsSettingsVisible;
 
@@ -159,16 +173,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (page is null) return false;
 
         if (_router.Navigate(page.Value)) RaisePageVisibilityChanged();
+
+        // 下载页离屏时停掉 500ms 刷新，回来再开：后台一直刷只会白白占 UI 线程
+        Downloads.SetActive(_router.IsDownloadVisible);
         return true;
     }
 
-    /// <summary>四个可见性属性一起通知。它们总是同时变化，分开通知会漏。</summary>
+    /// <summary>五个可见性属性一起通知。它们总是同时变化，分开通知会漏。</summary>
     private void RaisePageVisibilityChanged()
     {
         OnPropertyChanged(nameof(IsCpuDetailOpen));
         OnPropertyChanged(nameof(IsOverviewVisible));
         OnPropertyChanged(nameof(IsCpuDetailVisible));
         OnPropertyChanged(nameof(IsPeripheralsVisible));
+        OnPropertyChanged(nameof(IsDownloadVisible));
         OnPropertyChanged(nameof(IsSettingsVisible));
     }
 
@@ -796,6 +814,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void Shutdown()
     {
         _timer.Stop();
+
+        // 下载页停刷新并让服务落一次盘：不做的话「退出前最后几秒的进度」会丢
+        Downloads.Shutdown();
 
         if (_gameMode.IsActive)
         {
