@@ -56,11 +56,27 @@ public static class PeripheralClassifier
     {
         if (string.IsNullOrWhiteSpace(endpointName)) return false;
 
+        // 录音端点是耳机的「另一半」，不是另一只耳机：
+        // 「耳机麦克风 (DM02)」与「耳机 (DM02)」同时存在，不去掉就会多出一台。
+        if (endpointName.Contains("麦克风", StringComparison.Ordinal)
+            || endpointName.Contains("Microphone", StringComparison.OrdinalIgnoreCase))
+            return false;
+
         return endpointName.Contains("耳机", StringComparison.Ordinal)
             || endpointName.Contains("耳麦", StringComparison.Ordinal)
             || endpointName.Contains("Headphone", StringComparison.OrdinalIgnoreCase)
             || endpointName.Contains("Headset", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// 音频端点是否为录音（capture）端点。
+    ///
+    /// MMDevice 端点 ID 是固定格式：`{0.0.0.00000000}.{GUID}` 为播放，`{0.0.1.00000000}` 为录音。
+    /// 实测本机的「圆孔耳机 (Audio Device)」**播放与录音两个端点同名**、容器还不同
+    /// （`{7131B19F-…}` / `{7C62E129-…}`），只看名字根本分不出来，只能靠这个前缀。
+    /// </summary>
+    public static bool IsCaptureEndpoint(string? instanceId)
+        => instanceId?.Contains("{0.0.1.00000000}", StringComparison.OrdinalIgnoreCase) ?? false;
 
     /// <summary>
     /// 从设备实例 ID 判断连接方式。

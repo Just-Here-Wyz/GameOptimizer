@@ -114,8 +114,18 @@ public class PeripheralClassifierTests
     [InlineData("Headphones", true)]
     [InlineData("扬声器", false)]
     [InlineData("Microphone", false)]
+    [InlineData("耳机麦克风 (DM02)", false)]
     public void 只有耳机端点才算耳机(string name, bool expected)
         => PeripheralClassifier.IsHeadsetEndpoint(name).Should().Be(expected);
+
+    [Theory]
+    // MMDevice 端点 ID：{0.0.0.x} 播放，{0.0.1.x} 录音
+    [InlineData(@"SWD\MMDEVAPI\{0.0.1.00000000}.{D199669A-D5EA-4D65-B200-A12905AEB304}", true)]
+    [InlineData(@"SWD\MMDEVAPI\{0.0.0.00000000}.{1CAD56D7-1ED2-4F6A-8A4E-505DD7402D5D}", false)]
+    [InlineData(@"BTHENUM\{0000110B}\7&E233738", false)]
+    [InlineData(null, false)]
+    public void 录音端点应能识别(string? instanceId, bool expected)
+        => PeripheralClassifier.IsCaptureEndpoint(instanceId).Should().Be(expected);
 
     [Fact]
     public void 同一物理设备的多个接口应归到同一个键()

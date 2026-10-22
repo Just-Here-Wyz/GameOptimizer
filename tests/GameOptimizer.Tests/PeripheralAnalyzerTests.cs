@@ -64,11 +64,16 @@ public class PeripheralAnalyzerTests
         Node(@"ROOT\HIDCLASS\0000", "HIDClass", friendly: "Virtual HID Device",
             hidProduct: "UMDF Virtual hid device Product string"),
 
-        // 耳机：3.5mm 圆孔端点
+        // 耳机：3.5mm 圆孔播放端点（真机容器 7131B19F…）
+        Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{1CAD56D7}", "AudioEndpoint",
+            friendly: "圆孔耳机 (Audio Device)", parent: OnboardAudioId,
+            container: Guid.Parse("7131b19f-5d4b-5198-9292-4fe19270a314")),
+        // 同名录音端点：真机容器不同（7C62E129…），不能因此多出一台耳机
         Node(@"SWD\MMDEVAPI\{0.0.1.00000000}.{D199669A}", "AudioEndpoint",
-            friendly: "圆孔耳机 (Audio Device)", parent: OnboardAudioId),
+            friendly: "圆孔耳机 (Audio Device)", parent: OnboardAudioId,
+            container: Guid.Parse("7c62e129-f31d-55ef-aa23-303a98b2a7da")),
         // 虚拟音频设备：必须被排除
-        Node(@"SWD\MMDEVAPI\{0.0.1.00000000}.{36C89010}", "AudioEndpoint",
+        Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{36C89010}", "AudioEndpoint",
             friendly: "Dubbing AI Speaker (Dubbing AI Virtual Device)", parent: @"ROOT\MEDIA\0000"),
     ];
 
@@ -173,7 +178,7 @@ public class PeripheralAnalyzerTests
         var nodes = new List<PeripheralNode>
         {
             // 端点本身不报电量
-            Node(@"SWD\MMDEVAPI\{0.0.1.00000000}.{68D89CED}", "AudioEndpoint",
+            Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{68D89CED}", "AudioEndpoint",
                 friendly: "耳机 (DM02)", parent: BluetoothHeadsetId, container: container),
             // 同容器的蓝牙主设备才报电量
             Node(@"BTHENUM\DEV_8DB64D46D6DB\7&E233738", "Bluetooth",
@@ -235,6 +240,68 @@ public class PeripheralAnalyzerTests
             container: Guid.Parse("838be7a9-3545-52ad-a3df-372364c4f4a3"));
 
         PeripheralAnalyzer.IsBuiltInKeyboard(node).Should().BeFalse();
+    }
+
+    [Fact]
+    public void 蓝牙耳机连着时有线耳机也要显示()
+    {
+        // v2.2.2：原先只取第一个耳机端点，蓝牙耳机一连上，3.5mm 有线耳机就被挤掉。
+        var container = Guid.Parse("262e1d0b-cd6d-575e-af4a-6a0b25ff0a76");
+        var nodes = new List<PeripheralNode>
+        {
+            Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{68D89CED}", "AudioEndpoint",
+                friendly: "耳机 (DM02)", parent: BluetoothHeadsetId, container: container),
+            Node(@"BTHENUM\DEV_8DB64D46D6DB\7&E233738", "Bluetooth",
+                friendly: "DM02", container: container, battery: 64),
+            // 有线耳机：播放端点 + 同名的录音端点（真机容器不同，不能多出一台）
+            Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{1CAD56D7}", "AudioEndpoint",
+                friendly: "圆孔耳机 (Audio Device)", parent: OnboardAudioId,
+                container: Guid.Parse("7131b19f-5d4b-5198-9292-4fe19270a314")),
+            Node(@"SWD\MMDEVAPI\{0.0.1.00000000}.{D199669A}", "AudioEndpoint",
+                friendly: "圆孔耳机 (Audio Device)", parent: OnboardAudioId,
+                container: Guid.Parse("7c62e129-f31d-55ef-aa23-303a98b2a7da")),
+        };
+
+        var headsets = PeripheralAnalyzer.Build(nodes).Where(d => d.Kind == PeripheralKind.Headset).ToList();
+
+        headsets.Should().HaveCount(2);
+        headsets.Should().Contain(d => d.Model == "DM02" && d.Connection == PeripheralConnection.Wireless);
+        headsets.Should().Contain(d => d.Model == "圆孔耳机" && d.Connection == PeripheralConnection.Wired);
+    }
+
+    [Fact]
+    public void 同一只蓝牙耳机的麦克风端点不应多出一台耳机()
+    {
+        var container = Guid.Parse("262e1d0b-cd6d-575e-af4a-6a0b25ff0a76");
+        var nodes = new List<PeripheralNode>
+        {
+            Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{68D89CED}", "AudioEndpoint",
+                friendly: "耳机 (DM02)", parent: BluetoothHeadsetId, container: container),
+            Node(@"SWD\MMDEVAPI\{0.0.1.00000000}.{0E5A2C11}", "AudioEndpoint",
+                friendly: "耳机麦克风 (DM02)", parent: BluetoothHeadsetId, container: container),
+        };
+
+        PeripheralAnalyzer.Build(nodes).Count(d => d.Kind == PeripheralKind.Headset).Should().Be(1);
+    }
+
+    [Fact]
+    public void 同一只耳机的播放与免手持端点应合并成一台()
+    {
+        // A2DP 与 HFP 端点容器不同、型号一个带 Hands-Free 后缀，仍属同一只耳机
+        var nodes = new List<PeripheralNode>
+        {
+            Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{68D89CED}", "AudioEndpoint",
+                friendly: "耳机 (DM02)", parent: BluetoothHeadsetId,
+                container: Guid.Parse("262e1d0b-cd6d-575e-af4a-6a0b25ff0a76")),
+            Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{A1B2C3D4}", "AudioEndpoint",
+                friendly: "耳机 (DM02 Hands-Free AG Audio)", parent: BluetoothHeadsetId,
+                container: Guid.Parse("9b7f5c62-1d3e-5a4b-8c11-3d2e5f6a7b8c")),
+        };
+
+        var headsets = PeripheralAnalyzer.Build(nodes).Where(d => d.Kind == PeripheralKind.Headset).ToList();
+
+        headsets.Should().HaveCount(1);
+        headsets[0].Model.Should().Be("DM02");
     }
 
     [Fact]

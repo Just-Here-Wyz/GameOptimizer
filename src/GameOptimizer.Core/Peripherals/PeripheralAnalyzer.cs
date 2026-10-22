@@ -26,9 +26,7 @@ public static class PeripheralAnalyzer
 
         var devices = new List<PeripheralDevice>();
         devices.AddRange(BuildInputDevices(nodes, batteryByContainer));
-
-        var headset = BuildHeadset(nodes, batteryByContainer);
-        if (headset is not null) devices.Add(headset);
+        devices.AddRange(BuildHeadsets(nodes, batteryByContainer));
 
         // 顺序固定为 鼠标 → 键盘 → 耳机，界面不用再排
         return devices
@@ -153,18 +151,84 @@ public static class PeripheralAnalyzer
     /// <summary>
     /// 耳机：从音频端点推。名字里带「耳机 / 耳麦 / Headphone / Headset」的端点就是耳机，
     /// 型号取端点描述（如「耳机 (DM02)」里的 DM02）。
+    ///
+    /// 一个端点不等于一台耳机：同一只蓝牙耳机会同时暴露 A2DP 播放端点与免手持（HFP）端点，
+    /// 按端点直接列会在界面上出现两台一模一样的耳机。反过来，同时插着 3.5mm 有线耳机
+    /// 和蓝牙耳机时两台都必须显示（v2.2.2 修的就是这个：原先只取第一个端点，
+    /// 蓝牙耳机一连上，有线耳机就被挤掉了）。
     /// </summary>
-    private static PeripheralDevice? BuildHeadset(
+    private static IReadOnlyList<PeripheralDevice> BuildHeadsets(
         IReadOnlyList<PeripheralNode> nodes,
         IReadOnlyDictionary<Guid, int> batteryByContainer)
     {
-        var endpoint = nodes.FirstOrDefault(n =>
-            n.ClassName.Equals("AudioEndpoint", StringComparison.OrdinalIgnoreCase)
-            && !IsVirtualDevice(n)
-            && PeripheralClassifier.IsHeadsetEndpoint(n.FriendlyName));
+        // 已在列表里的耳机：归并键 + 设备本体
+        var found = new List<(string Key, PeripheralDevice Device)>();
 
-        if (endpoint is null) return null;
+        foreach (var endpoint in nodes)
+        {
+            if (!endpoint.ClassName.Equals("AudioEndpoint", StringComparison.OrdinalIgnoreCase)) continue;
+            if (IsVirtualDevice(endpoint)) continue;
+            // 录音端点（「圆孔耳机」「耳机麦克风」）是耳机的另一半，不是另一只耳机；
+            // 本机实测录音与播放端点同名且容器不同，必须靠端点 ID 前缀区分
+            if (PeripheralClassifier.IsCaptureEndpoint(endpoint.InstanceId)) continue;
+            if (!PeripheralClassifier.IsHeadsetEndpoint(endpoint.FriendlyName)) continue;
 
+            var device = CreateHeadset(endpoint, batteryByContainer);
+
+            // 同一物理设备的多个端点共享容器 ID
+            var key = endpoint.ContainerId?.ToString() ?? PeripheralClassifier.StableKey(endpoint.InstanceId);
+
+            var index = found.FindIndex(f => string.Equals(f.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (index < 0) index = found.FindIndex(f => IsSameHeadset(f.Device, device));
+
+            if (index < 0)
+            {
+                found.Add((key, device));
+                continue;
+            }
+
+            // 同一只耳机保留「信息更全」的那条端点（有电量 > 连接方式明确）
+            if (IsBetterEndpoint(device, found[index].Device))
+                found[index] = (found[index].Key, device);
+        }
+
+        return found.Select(f => f.Device).ToList();
+    }
+
+    /// <summary>
+    /// 容器读不到时（部分蓝牙端点没有容器属性）的兜底判重：
+    /// 型号相同，或一个是另一个的前缀（`DM02` 与 `DM02 Hands-Free AG Audio`），
+    /// 且连接方式一致，视为同一只耳机。
+    /// </summary>
+    private static bool IsSameHeadset(PeripheralDevice a, PeripheralDevice b)
+    {
+        if (a.Connection != b.Connection) return false;
+
+        if (string.Equals(a.Model, b.Model, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var (shorter, longer) = a.Model.Length <= b.Model.Length
+            ? (a.Model, b.Model)
+            : (b.Model, a.Model);
+
+        return shorter.Length >= 3
+            && longer.StartsWith(shorter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>两个端点属于同一只耳机时，谁的结论更可信：有电量 &gt; 连接方式已知。</summary>
+    private static bool IsBetterEndpoint(PeripheralDevice candidate, PeripheralDevice current)
+    {
+        if (candidate.BatteryPercent is not null && current.BatteryPercent is null) return true;
+        if (candidate.BatteryPercent is null && current.BatteryPercent is not null) return false;
+
+        return candidate.Connection != PeripheralConnection.Unknown
+            && current.Connection == PeripheralConnection.Unknown;
+    }
+
+    /// <summary>单个音频端点 → 一台耳机。</summary>
+    private static PeripheralDevice CreateHeadset(
+        PeripheralNode endpoint,
+        IReadOnlyDictionary<Guid, int> batteryByContainer)
+    {
         var name = endpoint.FriendlyName ?? "";
 
         var battery = endpoint.BatteryPercent;
