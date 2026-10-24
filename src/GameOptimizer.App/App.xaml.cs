@@ -28,7 +28,9 @@ public partial class App : Application
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
             {
-                var output = OffscreenRenderer.RenderAll(e.Args[1]);
+                var output = OffscreenRenderer.RenderAll(
+                    e.Args[1],
+                    e.Args.Length >= 3 ? e.Args[2] : null);
                 Console.WriteLine(output);
             }
             catch (Exception ex)

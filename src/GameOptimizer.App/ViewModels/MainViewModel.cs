@@ -26,7 +26,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly GameVramAssessor _assessor = new();
     private IReadOnlyList<GameEntry> _games = [];
 
-    public MainViewModel(PdhSampler sampler, bool samplerReady, GameModeController gameMode)
+    /// <param name="downloadStore">
+    /// 下载任务存储位置。默认用 %LocalAppData% 下的真实记录；
+    /// 离屏渲染截图时传一个临时文件，避免把使用者本机的下载任务拍进图片。
+    /// </param>
+    public MainViewModel(
+        PdhSampler sampler,
+        bool samplerReady,
+        GameModeController gameMode,
+        DownloadStore? downloadStore = null)
     {
         _sampler = sampler;
         _gameMode = gameMode;
@@ -35,7 +43,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         // 下载器（v2.2.0）：服务本身在 Core，这里只建一个实例并交给下载页的 ViewModel。
         // 下载与采集互不影响：上传/下载不动 PDH 计数器，共用事件循环也不会互相拖慢。
-        Downloads = new DownloadViewModel(new DownloadService(), Dispatcher.CurrentDispatcher)
+        Downloads = new DownloadViewModel(
+            new DownloadService(store: downloadStore), Dispatcher.CurrentDispatcher)
         {
             DirectoryPicker = DirectoryPicker.AskForFolder,
             OpenFolderAction = item => DirectoryPicker.OpenInExplorer(item.FilePath),
