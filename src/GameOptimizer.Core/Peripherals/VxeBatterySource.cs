@@ -12,13 +12,29 @@ public sealed class VxeBatterySource
 {
     private const uint GetBatteryLevel = 4;
 
+    private const uint GenericReadWrite = 0xC0000000;
+    private const uint FileShareReadWrite = 3;
+    private const uint OpenExisting = 3;
+
+    /// <summary>必须带 overlapped，否则 ReadFile 会同步阻塞到设备应答为止（可能永远）。</summary>
+    private const uint FileFlagOverlapped = 0x40000000;
+
+    private const int ErrorIoPending = 997;
+    private const uint WaitObject0 = 0;
+
+    private const int WriteTimeoutMs = 400;
+    private const int ReadTimeoutMs = 600;
+
+    /// <summary>厂商固件实测 250ms 左右回包；先等一小段，剩下的时间交给带超时的读。</summary>
+    private const int AnswerDelayMs = 120;
+
     public static int? ReadBatteryPercent() => Query()?.Level;
 
     public static bool? ReadChargingStatus() => Query()?.Charging;
 
     /// <summary>SetOutputReport 让设备进入应答状态，WriteFile 触发查询，ReadFile 取 17 字节响应。</summary>
     private static (int? Level, bool? Charging)? Query()
-        => FirstAnswering(FindCompxPaths(), QueryPath);
+        => FirstAnswering(FindCompxPaths(), QueryPathWithTimeout);
 
     /// <summary>
     /// 按顺序尝试每个候选接口，返回第一个给出结果的。
@@ -38,23 +54,39 @@ public sealed class VxeBatterySource
     }
 
     /// <summary>对单个接口路径做一次查询；设备不应答时返回 null，交给下一个候选。</summary>
-    private static (int? Level, bool? Charging)? QueryPath(string path)
+    /// <remarks>
+    /// 必须用 overlapped（异步）句柄 + 显式超时读。
+    ///
+    /// 踩过的坑：原来用同步句柄直接 <c>ReadFile</c>，设备不该答时这个调用**永远不返回**——
+    /// 而它是在 UI 线程上（外设页扫描 → 构造函数）跑的，等于整个程序卡死。
+    /// 表现是：--render 离屏渲染无输出无产物、dotnet test 跑完用例后进程退不出去。
+    /// </remarks>
+    private static (int? Level, bool? Charging)? QueryPathWithTimeout(string path)
     {
-        var handle = CreateFile(path, 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        var handle = CreateFile(
+            path, GenericReadWrite, FileShareReadWrite, IntPtr.Zero, OpenExisting, FileFlagOverlapped, IntPtr.Zero);
         if (handle == new IntPtr(-1)) return null;
+
+        var evt = CreateEvent(IntPtr.Zero, true, false, null);
+        if (evt == IntPtr.Zero)
+        {
+            CloseHandle(handle);
+            return null;
+        }
+
+        var overlapped = Marshal.AllocHGlobal(Marshal.SizeOf<OverlappedBuffer>());
 
         try
         {
             var output = BuildQuery((byte)GetBatteryLevel);
 
             if (!HidD_SetOutputReport(handle, output, (uint)output.Length)) return null;
-            Thread.Sleep(80);
-            if (!WriteFile(handle, output, (uint)output.Length, out _, IntPtr.Zero)) return null;
-            Thread.Sleep(250);
+
+            if (!WriteAll(handle, evt, overlapped, output, WriteTimeoutMs)) return null;
+            Thread.Sleep(AnswerDelayMs);
 
             var input = new byte[17];
-            if (!ReadFile(handle, input, 17, out var read, IntPtr.Zero)) return null;
-            if (read < 17) return null;
+            if (!ReadExact(handle, evt, overlapped, input, ReadTimeoutMs)) return null;
 
             return ParseResponse(input);
         }
@@ -64,8 +96,52 @@ public sealed class VxeBatterySource
         }
         finally
         {
+            Marshal.FreeHGlobal(overlapped);
+            CloseHandle(evt);
             CloseHandle(handle);
         }
+    }
+
+    /// <summary>发一包输出报文；超时或出错返回 false，绝不无限等。</summary>
+    private static bool WriteAll(IntPtr handle, IntPtr evt, IntPtr overlapped, byte[] buffer, int timeoutMs)
+    {
+        ResetEvent(evt);
+        Marshal.StructureToPtr(new OverlappedBuffer { Event = evt }, overlapped, false);
+
+        if (WriteFile(handle, buffer, (uint)buffer.Length, out var written, overlapped))
+            return written == buffer.Length;
+
+        if (Marshal.GetLastWin32Error() != ErrorIoPending) return false;
+
+        return WaitAndFinish(handle, evt, overlapped, buffer.Length, timeoutMs);
+    }
+
+    /// <summary>读满一整包；超时或读不够都返回 false。</summary>
+    private static bool ReadExact(IntPtr handle, IntPtr evt, IntPtr overlapped, byte[] buffer, int timeoutMs)
+    {
+        ResetEvent(evt);
+        Marshal.StructureToPtr(new OverlappedBuffer { Event = evt }, overlapped, false);
+
+        if (ReadFile(handle, buffer, (uint)buffer.Length, out var read, overlapped))
+            return read == buffer.Length;
+
+        if (Marshal.GetLastWin32Error() != ErrorIoPending) return false;
+
+        return WaitAndFinish(handle, evt, overlapped, buffer.Length, timeoutMs);
+    }
+
+    private static bool WaitAndFinish(
+        IntPtr handle, IntPtr evt, IntPtr overlapped, int expected, int timeoutMs)
+    {
+        if (WaitForSingleObject(evt, (uint)timeoutMs) != WaitObject0)
+        {
+            // 超时：撤销这条挂起的 I/O，别把手柄带着未完成请求关掉
+            CancelIoEx(handle, overlapped);
+            return false;
+        }
+
+        return GetOverlappedResult(handle, overlapped, out var transferred, false)
+               && transferred == expected;
     }
 
     internal static byte[] BuildQuery(byte commandId)
@@ -175,10 +251,39 @@ public sealed class VxeBatterySource
     private static extern bool HidD_SetOutputReport(IntPtr device, byte[] buffer, uint length);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool WriteFile(IntPtr device, byte[] buffer, uint length, out uint written, IntPtr overlapped);
+    private static extern bool WriteFile(
+        IntPtr device, byte[] buffer, uint length, out uint written, IntPtr overlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool ReadFile(IntPtr device, byte[] buffer, uint length, out uint read, IntPtr overlapped);
+    private static extern bool ReadFile(
+        IntPtr device, byte[] buffer, uint length, out uint read, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateEvent(
+        IntPtr attributes, bool manualReset, bool initialState, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ResetEvent(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetOverlappedResult(
+        IntPtr device, IntPtr overlapped, out uint transferred, bool wait);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CancelIoEx(IntPtr device, IntPtr overlapped);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OverlappedBuffer
+    {
+        public IntPtr Internal;
+        public IntPtr InternalHigh;
+        public uint Offset;
+        public uint OffsetHigh;
+        public IntPtr Event;
+    }
 
     [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr SetupDiGetClassDevs(ref Guid guid, string? enumerator, IntPtr parent, int flags);
