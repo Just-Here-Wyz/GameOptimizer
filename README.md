@@ -2,6 +2,13 @@
 
 > 当前版本 **v2.2.2** ｜ Windows 10/11 ｜ [完整文档](docs/README.md)
 
+## 直接下载
+
+**[⬇ GameOptimizer v2.2.2 单文件版](https://github.com/Just-Here-Wyz/GameOptimizer/releases/latest)**
+
+Windows 10 / 11 x64 · 69 MB · **自包含，无需安装 .NET 运行时** · 双击即用
+（程序声明 `requireAdministrator`，启动会弹 UAC）
+
 面向「显存不足 / 卡顿掉帧」的 Windows 桌面诊断工具。不做「一键提速」的承诺，而是把**显存水位 + 硬件占用 + 外设状态**摆到同一屏，告诉你卡顿到底来自哪里。
 
 ![总览](docs/images/home.png)
