@@ -1,13 +1,24 @@
 # 游戏优化助手
 
-> 当前版本 **v2.2.2** ｜ Windows 10/11 ｜ [完整文档](docs/README.md)
+> **v2.2.2** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
+
+[完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
 
 ## 直接下载
 
-**[⬇ GameOptimizer v2.2.2 单文件版](https://github.com/Just-Here-Wyz/GameOptimizer/releases/latest)**
+**[⬇ 下载 v2.2.2（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.2.2)**
 
 Windows 10 / 11 x64 · 69 MB · **自包含，无需安装 .NET 运行时** · 双击即用
 （程序声明 `requireAdministrator`，启动会弹 UAC）
+
+| 附件 | 说明 |
+|---|---|
+| `GameOptimizer-v2.2.2-win-x64.exe` | 单文件自包含，双击运行 |
+| `SHA256SUMS.txt` | 校验值，下载后可用 `certutil -hashfile <exe> SHA256` 对比 |
+
+> 未签名证书，首次运行可能触发 SmartScreen「更多信息 → 仍要运行」。
+
+---
 
 面向「显存不足 / 卡顿掉帧」的 Windows 桌面诊断工具。不做「一键提速」的承诺，而是把**显存水位 + 硬件占用 + 外设状态**摆到同一屏，告诉你卡顿到底来自哪里。
 
@@ -68,6 +79,29 @@ dotnet run --project src/GameOptimizer.App
 窗口为无系统白边的自绘窗体（深色标题栏 + 1px 描边），行为与普通窗口一致：可拖动、双击最大化、四边缩放。
 **点关闭按钮不会退出程序**，而是收进系统托盘继续后台采集；托盘图标双击恢复窗口，右键菜单「退出」才真正结束。
 
+## 工程概况
+
+| 项 | 数据 |
+|---|---|
+| 开发周期 | 2026-10-19 ~ 10-22，**4 天完成主体功能**（36 次提交） |
+| 提交与版本 | 累计 **40 次提交**、**14 个版本 tag**（v0.5.0 → v2.2.2） |
+| 代码量 | C# **18,682 行 / 112 个文件**（src + tests，不含生成代码）+ XAML 1,330 行 |
+| 测试 | **576 个 xUnit 用例**，只引用 `GameOptimizer.Core`，不引入 UI 依赖；少量用例会读真实系统（进程列表 / 电源计划 / 性能计数器）做一致性校验 |
+| 分层 | `Core` 无 UI 依赖、可单测；`App` 只做 WPF 呈现与交互 |
+
+## 怎么做的（AI 协作说明）
+
+这个项目是**个人独立立项**：需求拆解、技术选型、模块划分、验收标准和代码评审由本人完成；
+**具体编码与测试用例的落地过程大量借助 AI Agent**——多轮对话生成 → 我逐块审阅取舍 → 编译与用例回归验证。
+
+过程中 AI 暴露了两个系统性缺陷，值得单独记一笔：
+
+- **伪修复**：反复给出「同一数据源取两次再比较」的写法，看起来像修复，实际检查的是同一个值；
+- **多真源不收敛**：同一份状态被三处代码各自缓存，改一处另两处不跟着变。
+
+最终沉淀成四条协作规矩（改前先定位、一次只改一个因果链、修完必须回读验证、禁止同源比对）。
+完整复盘见 [docs/07-AI协作复盘.md](docs/07-AI协作复盘.md)。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -78,15 +112,17 @@ dotnet run --project src/GameOptimizer.App
 | [已知限制](docs/04-已知限制.md) | **明确做不到的事**，先看这个 |
 | [开发指南](docs/05-开发指南.md) | 构建、调试、踩过的坑 |
 | [变更记录](docs/06-变更记录.md) | 演进历史与修过的真实 bug |
+| [AI 协作复盘](docs/07-AI协作复盘.md) | 4 天怎么和 AI 把这个项目做出来、它在哪儿坑过我 |
 
 ## 项目结构
 
 ```
 src/GameOptimizer.Core     采集、判定、外设识别、游戏模式动作（无 UI 依赖，可单测）
 src/GameOptimizer.App      WPF 界面（app.manifest 声明 requireAdministrator）
-tests/GameOptimizer.Tests  574 个 xUnit 用例
+tests/GameOptimizer.Tests  xUnit 用例，仅引用 Core
 tools/                     运维脚本
-docs/                      项目文档
+docs/                      项目文档（01~07 + 界面截图）
+publish/                   发布产物（已 gitignore，不入库）
 ```
 
 ## 测试
@@ -94,6 +130,20 @@ docs/                      项目文档
 ```powershell
 dotnet test
 ```
+
+本机实测：**576 个用例全部通过，7 秒**（`-c Release`）。
+
+⚠️ **已知问题**：跑完之后测试进程不一定能退出。有一支用例会去本机真实 HID 设备上读 VXE 鼠标电量
+（`VxeBatterySourceTests.真实设备应能读到电量`），读不到设备时会一直等，测试主机空闲到 90 秒被
+判为挂起。用例本身是通过的，卡的是进程收尾。
+
+在没有该鼠标的机器上建议排除硬件相关用例：
+
+```powershell
+dotnet test --filter "FullyQualifiedName!~真实设备&FullyQualifiedName!~键盘集合"
+```
+
+这是待修的债：真实设备用例应该做成显式开关（环境变量或 `[Trait]`）而不是默认参与 `dotnet test`。
 
 ## 设计原则
 
@@ -114,13 +164,7 @@ dotnet test
   公开报文得到，仅读取、不写入、不绕过授权，组包与解析为独立实现。厂商名称仅作描述性使用，
   不代表任何官方授权或背书。
 - **主动边界**：不注入游戏进程、不 Hook 图形 API、不读写游戏内存、不装驱动、不伪造设备身份。
-- 本项目代码以 **MIT** 发布，见 [LICENSE](LICENSE)。
 
 ## 许可
 
-代码：[MIT](LICENSE) · 文档：CC BY 4.0
-
-
-
-
-
+代码 [MIT](LICENSE) · 文档 CC BY 4.0 · Copyright © 2026 王亚峥
