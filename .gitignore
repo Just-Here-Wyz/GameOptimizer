@@ -26,3 +26,6 @@ desktop.ini
 
 # 临时截图与验证产物
 .artifacts/
+
+# 内部工作记录（AI 协作日志等，不入库）
+.workbuddy/

@@ -4,7 +4,8 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 /// <summary>
-/// VXE/ATK（Compx）鼠标电量读取。协议来自 hub.atk.pro 前端驱动逆向（逆向REA 工作区），
+/// VXE/ATK（Compx）鼠标电量读取。通信格式由分析厂商网页驱动（hub.atk.pro，前端 WebHID）
+/// 与设备之间的公开报文得到，组包与解析为独立实现，未复制厂商任何代码。
 /// 本机 VXE R1 实测：输出 08 04 00..49 → 输入 08 04 00 00 00 02 41 00 0F 7F..78（电量 0x41=65%）。
 /// </summary>
 public sealed class VxeBatterySource

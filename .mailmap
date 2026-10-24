@@ -1,0 +1,3 @@
+# 统一作者显示：历史提交用过的邮箱都归到同一个 GitHub 身份，
+# 避免公开仓库暴露个人邮箱（历史 commit 不做改写，只影响显示）
+Wang Yazheng <340478683+Just-Here-Wyz@users.noreply.github.com> <2354372925@qq.com>

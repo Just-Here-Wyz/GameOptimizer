@@ -75,7 +75,7 @@ public sealed class Win32WorkingSetReleaser : IWorkingSetReleaser
     private const uint ProcessQueryInformation = 0x0400;
     private const uint ProcessSetQuota = 0x0100;
 
-    /// <summary>允许把工作集缩到 0 的硬限制解除标志（与 PCL2 的实现一致）。</summary>
+    /// <summary>允许把工作集缩到 0 的硬限制解除标志（Windows 公开 API 的常规用法）。</summary>
     private const uint QuotaLimitsHardWsMinDisable = 0x0002;
     private const uint QuotaLimitsHardWsMaxDisable = 0x0008;
 

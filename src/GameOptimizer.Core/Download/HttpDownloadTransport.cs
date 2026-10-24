@@ -26,7 +26,7 @@ public sealed class HttpDownloadTransport : IDownloadTransport, IDisposable
         _client.Timeout = configured;
 
         _client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            "GameOptimizer/2.2 (+https://github.com/Hex-Dragon/PCL2-inspired-downloader)");
+            "GameOptimizer/2.2 (+https://github.com/Just-Here-Wyz/GameOptimizer)");
         _client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("identity"));
     }
 

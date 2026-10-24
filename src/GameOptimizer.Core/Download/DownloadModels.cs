@@ -62,7 +62,7 @@ public sealed class DownloadSettings
     public const int MinReadStallTimeoutMs = 1_000;
     public const int MaxReadStallTimeoutMs = 120_000;
 
-    /// <summary>单个任务内的分片并发数，默认 4（PCL2 默认值同档）。</summary>
+    /// <summary>单个任务内的分片并发数，默认 4（通用分片下载器的常见默认值）。</summary>
     public int ParallelSegments { get; set; } = 4;
 
     /// <summary>同时下载的任务数，默认 2。分片并发是「一个任务内」，这个是「任务之间」。</summary>
