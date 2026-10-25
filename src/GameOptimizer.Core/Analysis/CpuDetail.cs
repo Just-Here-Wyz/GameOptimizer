@@ -49,7 +49,7 @@ public sealed class CpuDetail
     private CpuDetail(
         CoreGroup performance,
         CoreGroup efficiency,
-        double totalCpuPercent,
+        double? totalCpuPercent,
         double globalPeakPercent,
         string topologyText,
         bool isHybrid)
@@ -68,8 +68,16 @@ public sealed class CpuDetail
     /// <summary>能效核组。全同构机器上为空。</summary>
     public CoreGroup EfficiencyCore { get; }
 
-    /// <summary>整机平均占用（与「系统压力」面板的总 CPU 同源，详情页里并排展示便于对照）。</summary>
-    public double TotalCpuPercent { get; }
+    /// <summary>
+    /// 整机平均占用（与首页 CPU 仪表同源，详情页里并排展示便于对照）。
+    ///
+    /// 可空：总 CPU 计数器读不到时它是 null，界面显示「未知」。
+    /// 不给它默认 0——0% 会被理解成「整机空闲」，那是另一回事。
+    /// </summary>
+    public double? TotalCpuPercent { get; }
+
+    /// <summary>总 CPU 的展示文本。读不到就是「未知」。</summary>
+    public string TotalCpuText => TotalCpuPercent is { } v ? $"{v:F0}%" : "未知";
 
     /// <summary>全局单核峰值（跨全部逻辑核）。与 P 核峰值并列，解释两者差异。</summary>
     public double GlobalPeakPercent { get; }
@@ -130,8 +138,8 @@ public sealed class CpuDetail
     /// </summary>
     /// <param name="frame">采样帧。其 <see cref="SampleFrame.PerCorePercent"/> 为空时返回空的详情。</param>
     /// <param name="topology">CPU 拓扑。</param>
-    /// <param name="totalCpuPercent">整机平均占用（来自系统压力采集器）。</param>
-    public static CpuDetail From(SampleFrame frame, CpuTopology topology, double totalCpuPercent)
+    /// <param name="totalCpuPercent">整机平均占用。读不到时传 null，界面显示「未知」。</param>
+    public static CpuDetail From(SampleFrame frame, CpuTopology topology, double? totalCpuPercent)
     {
         var usage = frame.PerCorePercent;
 

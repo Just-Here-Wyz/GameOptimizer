@@ -33,6 +33,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly GameVramAssessor _assessor = new();
     private IReadOnlyList<GameEntry> _games = [];
 
+    /// <summary>CPU 负载诊断规则（Core 纯逻辑）：每秒喂一帧，它负责平均、趋势与连续负载判定。</summary>
+    private readonly CpuLoadAnalyzer _cpuAnalyzer = new();
+
+    /// <summary>进程级 CPU 占用采集（差分口径）。只在 CPU 页可见时跑。</summary>
+    private readonly ProcessCpuSampler _processCpu = new();
+
+    /// <summary>快速优化执行器：只做「结束用户确认过的进程」这一件会改系统的事。</summary>
+    private readonly CpuQuickOptimizeRunner _cpuOptimize = new();
+
+    /// <summary>已安装游戏的 exe 主名，用于把游戏本体排除在「可结束」候选之外。</summary>
+    private IReadOnlySet<string> _gameStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     /// <param name="downloadStore">
     /// 下载任务存储位置。默认用 %LocalAppData% 下的真实记录；
     /// 离屏渲染截图时传一个临时文件，避免把使用者本机的下载任务拍进图片。
@@ -81,17 +93,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ReloadWhitelistCommand = new RelayCommand(_ => LoadWhitelistFromDisk());
         ScanPeripheralsCommand = new RelayCommand(_ => RefreshPeripherals());
         OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
-        OpenCpuDetailCommand = new RelayCommand(_ =>
-        {
-            if (_router.OpenCpuDetail()) RaisePageVisibilityChanged();
 
-            // 立刻采一次：采集改成按需后，不主动填一次会让详情页第一秒全是 0
-            Tick();
-        });
+        // 首页 CPU 卡片：点非按钮区域进诊断页；「CPU 优化」按钮走独立的快速优化流程。
+        // 两者是**并列**的两个控件（不是嵌套按钮），点优化按钮不会连带触发导航。
+        OpenCpuDetailCommand = new RelayCommand(_ => NavigateToCpu(CpuView.Diagnosis));
+        ShowCpuDiagnosisCommand = new RelayCommand(_ => NavigateToCpu(CpuView.Diagnosis));
+        ShowCpuAdvancedCommand = new RelayCommand(_ => NavigateToCpu(CpuView.Advanced));
         CloseCpuDetailCommand = new RelayCommand(_ =>
         {
             if (_router.CloseCpuDetail()) RaisePageVisibilityChanged();
         });
+
+        OpenCpuOptimizeCommand = new RelayCommand(_ => OpenCpuOptimize(), _ => !IsCpuOptimizeRunning);
+        CloseCpuOptimizeCommand = new RelayCommand(_ => CloseCpuOptimize());
+        RunCpuOptimizeCommand = new RelayCommand(_ => RunCpuOptimize(), _ => CanRunCpuOptimize);
+        RevertCpuOptimizeCommand = new RelayCommand(_ => RevertCpuOptimize(),
+            _ => HasCpuOptimizeChanges && !IsCpuOptimizeRunning);
 
         // 先扫游戏库：白名单扫描要用游戏 exe 名排除游戏进程，
         // 顺序反了会把正在玩的游戏列进「可结束」候选里
@@ -146,11 +163,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>首页内存仪表盘旁的「优化」按钮：触发 <see cref="MemoryCleanAction"/>。</summary>
     public RelayCommand OptimizeMemoryCommand { get; }
-    /// <summary>点击 CPU 仪表进入详情页。</summary>
+
+    /// <summary>点击首页 CPU 卡片（非按钮区域）进入 CPU 诊断页。</summary>
     public RelayCommand OpenCpuDetailCommand { get; }
 
-    /// <summary>详情页左上角「← 返回」。</summary>
+    /// <summary>CPU 页二级导航：切到诊断视图。</summary>
+    public RelayCommand ShowCpuDiagnosisCommand { get; }
+
+    /// <summary>CPU 页二级导航：切到高级详情视图。</summary>
+    public RelayCommand ShowCpuAdvancedCommand { get; }
+
+    /// <summary>CPU 页左上角「← 返回」。</summary>
     public RelayCommand CloseCpuDetailCommand { get; }
+
+    /// <summary>首页「CPU 优化」按钮：进入独立的快速优化流程。</summary>
+    public RelayCommand OpenCpuOptimizeCommand { get; }
+
+    /// <summary>快速优化流程里的「取消 / 返回诊断」。</summary>
+    public RelayCommand CloseCpuOptimizeCommand { get; }
+
+    /// <summary>快速优化流程里的「执行选中项」。未勾选任何项时不可用。</summary>
+    public RelayCommand RunCpuOptimizeCommand { get; }
+
+    /// <summary>执行后按原路径重新拉起被结束的进程。</summary>
+    public RelayCommand RevertCpuOptimizeCommand { get; }
 
     // ---------- 页面可见性（由 PageRouter 统一决定，界面只做单向绑定） ----------
 
@@ -166,11 +202,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>详情页是否展开。收起后每秒采集会自动停下（见 <see cref="Tick"/>）。</summary>
     public bool IsCpuDetailOpen => _router.IsCpuDetailOpen;
 
-    /// <summary>总览页主体是否可见（详情页展开或切到其它分区时收起）。</summary>
+    /// <summary>总览页主体是否可见（CPU 页展开或切到其它分区时收起）。</summary>
     public bool IsOverviewVisible => _router.IsOverviewVisible;
 
-    /// <summary>CPU 详情页是否可见。切到外设 / 设置时必须跟着收起。</summary>
+    /// <summary>CPU 页容器是否可见。切到外设 / 设置时必须跟着收起。</summary>
     public bool IsCpuDetailVisible => _router.IsCpuDetailVisible;
+
+    /// <summary>CPU 诊断视图是否可见（默认视图）。</summary>
+    public bool IsCpuDiagnosisVisible => _router.IsCpuDiagnosisVisible;
+
+    /// <summary>CPU 高级详情视图是否可见。</summary>
+    public bool IsCpuAdvancedVisible => _router.IsCpuAdvancedVisible;
+
+    /// <summary>快速优化流程是否可见（寄居在诊断视图里）。</summary>
+    public bool IsCpuOptimizeVisible => _router.IsCpuOptimizeVisible;
+
+    /// <summary>二级导航「CPU 诊断」的高亮判定。</summary>
+    public bool IsCpuDiagnosisTab => _router.CpuTab == CpuView.Diagnosis;
+
+    /// <summary>二级导航「高级详情」的高亮判定。</summary>
+    public bool IsCpuAdvancedTab => _router.CpuTab == CpuView.Advanced;
+
+    /// <summary>诊断页签底色：选中为主色，未选中为普通按钮灰。</summary>
+    public string CpuDiagnosisTabHex => IsCpuDiagnosisTab ? "#FF4C8DFF" : "#FF26282F";
+
+    /// <summary>高级详情页签底色。</summary>
+    public string CpuAdvancedTabHex => IsCpuAdvancedTab ? "#FF4C8DFF" : "#FF26282F";
 
     /// <summary>外设页是否可见。</summary>
     public bool IsPeripheralsVisible => _router.IsPeripheralsVisible;
@@ -202,15 +259,46 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return true;
     }
 
-    /// <summary>五个可见性属性一起通知。它们总是同时变化，分开通知会漏。</summary>
+    /// <summary>CPU 页的全部可见性属性一起通知。它们总是同时变化，分开通知会漏。</summary>
     private void RaisePageVisibilityChanged()
     {
         OnPropertyChanged(nameof(IsCpuDetailOpen));
         OnPropertyChanged(nameof(IsOverviewVisible));
         OnPropertyChanged(nameof(IsCpuDetailVisible));
+        OnPropertyChanged(nameof(IsCpuDiagnosisVisible));
+        OnPropertyChanged(nameof(IsCpuAdvancedVisible));
+        OnPropertyChanged(nameof(IsCpuOptimizeVisible));
+        OnPropertyChanged(nameof(IsCpuDiagnosisTab));
+        OnPropertyChanged(nameof(IsCpuAdvancedTab));
+        OnPropertyChanged(nameof(CpuDiagnosisTabHex));
+        OnPropertyChanged(nameof(CpuAdvancedTabHex));
         OnPropertyChanged(nameof(IsPeripheralsVisible));
         OnPropertyChanged(nameof(IsDownloadVisible));
         OnPropertyChanged(nameof(IsSettingsVisible));
+
+        // 离开 CPU 页就丢掉采样历史：中间那段确实没采（页面不可见时按约定停采），
+        // 把新旧数据拼成一条「连续的 30 秒」是伪造，下次进来重新累计才对。
+        if (!_router.IsCpuDetailVisible) ResetCpuSampling();
+    }
+
+    /// <summary>清空 CPU 诊断的采样历史与进程排名（页面不可见时调用）。</summary>
+    private void ResetCpuSampling()
+    {
+        _cpuAnalyzer.Reset();
+        _processCpu.Reset();
+        CpuProcesses.Clear();
+        _lastRanking = null;
+        CpuProcessStatus = "采样中（页面可见后开始采样）";
+        CpuReport = CpuDiagnosis.Empty("尚未开始采样");
+    }
+
+    /// <summary>切到 CPU 页的某个二级视图（诊断 / 高级详情）。</summary>
+    private void NavigateToCpu(CpuView view)
+    {
+        if (_router.OpenCpuDetail(view)) RaisePageVisibilityChanged();
+
+        // 立刻补一帧：采集是按需的，不主动填一次会让新页面第一秒全是空
+        Tick();
     }
 
     private CpuDetail? _cpuDetail;
@@ -415,37 +503,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set { _gpuPercent = OccupancyPalette.Clamp(value); OnPropertyChanged(); }
     }
 
-    private double _cpuCorePercent;
+    private double? _totalCpuPercent;
+
     /// <summary>
-    /// 仪表盘上显示的 CPU 峰值 = **性能核峰值**。
+    /// 整机 CPU **总体占用率**（PDH `Processor\% Processor Time\_Total`）。
     ///
-    /// 不用全局单核峰值：实测本机把 8 个后台进程绑到 E 核满载时，
-    /// 全局峰值亮红显示 98.6%，而跑游戏的 P 核只有 29.3%，会让人白白降画质。
+    /// 首页仪表显示它，CPU 页的「总 CPU」也用它——同一个计数器每秒只读一次，
+    /// 不重复采集，也不会出现「首页 42%、详情页 37%」这种两套口径。
+    ///
+    /// null 表示这一秒没采到：界面显示「未知」，绝不用 0 冒充满载或空闲。
     /// </summary>
-    public double CpuCorePercent
+    public double? TotalCpuPercent
     {
-        get => _cpuCorePercent;
+        get => _totalCpuPercent;
         private set
         {
-            _cpuCorePercent = OccupancyPalette.Clamp(value);
+            if (_totalCpuPercent == value) return;
+            _totalCpuPercent = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(CpuCoreLabel));
+            OnPropertyChanged(nameof(CpuLoadPercent));
+            OnPropertyChanged(nameof(HasCpuLoad));
+            OnPropertyChanged(nameof(CpuLoadText));
+            OnPropertyChanged(nameof(CpuGaugeText));
         }
     }
 
-    /// <summary>仪表的标题：混合架构机器上写明是「P 核峰值」，避免与总 CPU 混淆。</summary>
-    public string CpuCoreLabel => IsHybridCpu ? "CPU P 核峰值" : "CPU 单核峰值";
+    /// <summary>仪表环的取值。读不到时给 0，但环中心写「未知」——环上不存在假数字。</summary>
+    public double CpuLoadPercent => TotalCpuPercent ?? 0;
 
-    /// <summary>仪表下方的说明：讲清这个数是怎么算出来的。</summary>
-    public string CpuCoreHint => IsHybridCpu
-        ? "性能核中最高的一个（跑游戏的地方）"
-        : "占用最高的一个核";
+    /// <summary>是否采到了总 CPU 读数。</summary>
+    public bool HasCpuLoad => TotalCpuPercent.HasValue;
 
-    /// <summary>本机是否为混合架构（有大小核）。</summary>
+    /// <summary>仪表下方那行数字：总体占用率，读不到写「未知」。</summary>
+    public string CpuLoadText => TotalCpuPercent is { } v ? $"{v:F0}%" : "未知";
+
+    /// <summary>环中心文字：有数时留空（环里自己画百分比），无数时写「未知」。</summary>
+    public string CpuGaugeText => HasCpuLoad ? "" : "未知";
+
+    /// <summary>本机是否为混合架构（有大小核）。高级详情里据此决定是否展示 P/E 核分组。</summary>
     public bool IsHybridCpu => _sampler.Topology.IsHybrid;
 
     /// <summary>CPU 拓扑的可读描述，例如「4 大核 8 线程 · 8 小核」。</summary>
     public string CpuTopologyText => _sampler.Topology.Describe();
+
+    /// <summary>CPU 型号（注册表 ProcessorNameString），读不到为「未知」。</summary>
+    public string CpuModelText => CpuIdentity.ModelName;
+
+    /// <summary>核心 / 线程数：物理核按 CoreIndex 去重，线程取逻辑处理器数。</summary>
+    public string CpuCoreCountText => $"{_sampler.Topology.PhysicalCoreCount} 核 / {_sampler.Topology.Processors.Count} 线程";
 
     // ---------- 系统压力：磁盘吞吐 + 总 CPU（补单核峰值的盲区） ----------
 
@@ -457,35 +562,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set { _pressureStatus = value; OnPropertyChanged(); }
     }
 
-    private double _diskBytesPerSec;
-    public double DiskBytesPerSec
+    private double? _diskBytesPerSec;
+
+    /// <summary>磁盘吞吐（各物理盘求和）。null = 这一秒没采到，界面写「未知」。</summary>
+    public double? DiskBytesPerSec
     {
         get => _diskBytesPerSec;
         private set
         {
+            if (_diskBytesPerSec == value) return;
             _diskBytesPerSec = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(DiskText));
         }
     }
 
-    /// <summary>磁盘吞吐。贴图流式加载卡不卡在磁盘上，看这个。</summary>
-    public string DiskText => ThroughputText.Format(_diskBytesPerSec);
-
-    private double _totalCpuPercent;
-    public double TotalCpuPercent
-    {
-        get => _totalCpuPercent;
-        private set
-        {
-            _totalCpuPercent = OccupancyPalette.Clamp(value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(TotalCpuText));
-        }
-    }
-
-    /// <summary>整机 CPU 占用。仪表盘上的「单核峰值」看不出整机是否被吃满，这项才是。</summary>
-    public string TotalCpuText => $"{_totalCpuPercent:F0}%";
+    /// <summary>
+    /// 磁盘吞吐。贴图流式加载卡不卡在磁盘上看这个。
+    /// 它是**系统压力**指标，不是 CPU 指标——界面文案不能混着写。
+    /// </summary>
+    public string DiskText => _diskBytesPerSec is { } v ? ThroughputText.Format(v) : "未知";
 
     private string _gameModeStatus = "游戏模式：未开启";
     public string GameModeStatus { get => _gameModeStatus; private set { _gameModeStatus = value; OnPropertyChanged(); } }
@@ -743,39 +839,454 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 : 0;
 
             GpuPercent = frame.Gpu3DPercent;
-            CpuCorePercent = frame.PerformanceCorePercent;
         }
         catch (Exception ex)
         {
             PeripheralStatus = $"采集异常：{ex.Message}";
         }
 
-        // 系统压力与逐核分组只在详情页**真的看得见**时采集：
-        // 它们只在详情页展示，收起状态下每秒读一遍纯属浪费
-        // （磁盘计数器要给各物理盘各读一次，不是零成本）。
-        // 注意用 IsCpuDetailVisible 而不是 IsCpuDetailOpen：用户展开详情后切到外设页，
-        // 详情页已经被藏起来了，这时再采样就是纯浪费。
-        if (!IsCpuDetailVisible) return;
+        // 总 CPU：首页仪表与 CPU 页共用同一个计数器，每秒只读一次。
+        // 拆开读是为了避免「同一秒读两次同一个计数器」——第二次算的是极短区间，数字会失真。
+        UpdateTotalCpu();
+
+        // 磁盘吞吐是系统压力指标，只在 CPU 页可见时才采（各物理盘各读一次，不是零成本）
+        if (IsCpuDetailVisible) UpdateDiskThroughput();
+
+        // CPU 诊断：只有诊断视图或快速优化流程可见时才喂数据。
+        // 用「可见」而不是「展开」——用户切到高级详情后，诊断窗口的数据不该继续算。
+        if (IsCpuDiagnosisVisible || IsCpuOptimizeVisible) UpdateCpuDiagnosis(frame);
+
+        // 逐核分组只服务高级详情视图
+        if (IsCpuAdvancedVisible && frame is not null)
+            CpuDetail = GameOptimizer.Core.Analysis.CpuDetail.From(
+                frame, _sampler.Topology, TotalCpuPercent);
+    }
+
+    /// <summary>读一次总 CPU。计数器不可用时置 null，界面显示「未知」。</summary>
+    private void UpdateTotalCpu()
+    {
+        if (!_pressureReady || !_pressure.HasTotalCpu)
+        {
+            TotalCpuPercent = null;
+            return;
+        }
 
         try
         {
-            if (_pressureReady)
-            {
-                var p = _pressure.Sample(Environment.TickCount64);
-
-                DiskBytesPerSec = p.DiskBytesPerSec;
-                TotalCpuPercent = p.TotalCpuPercent;
-            }
+            TotalCpuPercent = _pressure.ReadTotalCpuPercent();
         }
         catch (Exception ex)
         {
-            PressureStatus = $"系统压力采集异常：{ex.Message}";
+            PressureStatus = $"总 CPU 采集异常：{ex.Message}";
+            TotalCpuPercent = null;
+        }
+    }
+
+    /// <summary>读一次磁盘吞吐（仅 CPU 页可见时）。</summary>
+    private void UpdateDiskThroughput()
+    {
+        if (!_pressureReady || !_pressure.HasDisk) return;
+
+        try
+        {
+            DiskBytesPerSec = _pressure.ReadDiskBytesPerSec();
+        }
+        catch (Exception ex)
+        {
+            PressureStatus = $"磁盘吞吐采集异常：{ex.Message}";
+            DiskBytesPerSec = null;
+        }
+    }
+
+    // ---------- CPU 诊断 ----------
+
+    private CpuDiagnosis _cpuReport = CpuDiagnosis.Empty("尚未开始采样");
+
+    /// <summary>
+    /// 诊断结果（负载档位、30 秒平均、趋势、建议、采样状态）。
+    /// 规则全部在 Core 的 <see cref="CpuLoadAnalyzer"/> 里，这里只负责喂数据与通知界面。
+    /// </summary>
+    public CpuDiagnosis CpuReport
+    {
+        get => _cpuReport;
+        private set
+        {
+            _cpuReport = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CpuTrendPoints));
+            OnPropertyChanged(nameof(CpuLevelHex));
+        }
+    }
+
+    /// <summary>趋势图数据（最近 30 秒，只含有效帧）。</summary>
+    public IReadOnlyList<CpuTrendPoint> CpuTrendPoints => _cpuReport.Trend;
+
+    /// <summary>负载状态的颜色：高负载红、关注橙、正常绿、采样中蓝、未知灰。</summary>
+    public string CpuLevelHex => _cpuReport.Level switch
+    {
+        CpuLoadLevel.HighLoad => "#FFFF453A",
+        CpuLoadLevel.Watch => "#FFFF9F0A",
+        CpuLoadLevel.Normal => "#FF34C759",
+        CpuLoadLevel.Sampling => "#FF4C8DFF",
+        _ => "#FF5C5F66",
+    };
+
+    /// <summary>高占用进程列表（只在能可靠算出时才展示，算不出时列表为空且状态行说明原因）。</summary>
+    public ObservableCollection<ProcessCpuItem> CpuProcesses { get; } = [];
+
+    private string _cpuProcessStatus = "采样中（页面可见后开始采样）";
+
+    /// <summary>进程列表的采样状态：采样中 / 统计了多少个 / 几个读不到。</summary>
+    public string CpuProcessStatus
+    {
+        get => _cpuProcessStatus;
+        private set { _cpuProcessStatus = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>
+    /// 进程 CPU 的口径说明。界面必须展示——用户要知道这个百分比是怎么算的。
+    /// </summary>
+    public string CpuProcessCaliber =>
+        $"口径：进程处理器时间增量 ÷ 墙钟时间 ÷ {_processCpu.LogicalProcessorCount} 个逻辑处理器，" +
+        "全机进程合计不会超过 100%；受保护进程读不到处理器时间，会计入「读不到」而不是当作 0%。";
+
+    private ProcessCpuRanking? _lastRanking;
+
+    /// <summary>优化流程打开时进程占用还没算出来（需要两次采样），等第一份排名到了再补检测。</summary>
+    private bool _cpuOptimizeAwaitingData;
+
+    /// <summary>每秒喂一帧：先出诊断，再更新进程排名。</summary>
+    private void UpdateCpuDiagnosis(SampleFrame? frame)
+    {
+        var now = Environment.TickCount64;
+
+        _cpuAnalyzer.Add(new CpuLoadSample(now, TotalCpuPercent, frame?.PerCorePercent));
+        CpuReport = _cpuAnalyzer.Build();
+
+        RefreshProcessRanking(now);
+
+        // 进入流程的第一帧通常还没有进程差分基准（要两次采样）。
+        // 如果不在这里补一次，用户会一直看到「数据尚不可用」直到自己退出重进。
+        if (IsCpuOptimizeVisible && !IsCpuOptimizeRunning
+            && _cpuOptimizeAwaitingData && _lastRanking is { IsReady: true })
+        {
+            _cpuOptimizeAwaitingData = false;
+            BuildCpuOptimizePlan();
+        }
+    }
+
+    private void RefreshProcessRanking(long now)
+    {
+        try
+        {
+            var ranking = _processCpu.Sample(now, _gameStems, top: 6);
+            _lastRanking = ranking;
+            CpuProcessStatus = ranking.Note;
+            SyncProcessItems(ranking.Top);
+        }
+        catch (Exception ex)
+        {
+            // 失败必须可见：列表停在上一帧，但状态行说明为什么不再更新
+            _lastRanking = null;
+            CpuProcessStatus = $"进程占用采集异常：{ex.Message}";
+        }
+    }
+
+    /// <summary>原地更新，避免每秒重建集合导致列表闪烁。</summary>
+    private void SyncProcessItems(IReadOnlyList<ProcessCpuUsage> top)
+    {
+        var sameShape = CpuProcesses.Count == top.Count;
+        if (sameShape)
+        {
+            for (var i = 0; i < top.Count; i++)
+            {
+                if (CpuProcesses[i].ProcessId == top[i].ProcessId) continue;
+                sameShape = false;
+                break;
+            }
         }
 
-        // 逐核分组。用全限定名：属性也叫 CpuDetail，直接写 CpuDetail.From 会被解析成属性访问。
-        if (frame is not null)
-            CpuDetail = GameOptimizer.Core.Analysis.CpuDetail.From(
-                frame, _sampler.Topology, TotalCpuPercent);
+        if (!sameShape)
+        {
+            CpuProcesses.Clear();
+            foreach (var p in top) CpuProcesses.Add(new ProcessCpuItem(p));
+            return;
+        }
+
+        for (var i = 0; i < top.Count; i++) CpuProcesses[i].Update(top[i]);
+    }
+
+    // ---------- CPU 快速优化 ----------
+
+    private CpuOptimizePlan _cpuOptimizePlan = CpuOptimizePlan.Empty("尚未检测");
+
+    /// <summary>可勾选的优化项。默认**全部不勾选**：结束进程属于破坏性操作。</summary>
+    public ObservableCollection<CpuOptimizeItemView> CpuOptimizeItems { get; } = [];
+
+    /// <summary>本次检测的汇总（有几个候选、合计多少占用）。</summary>
+    public string CpuOptimizeSummary => _cpuOptimizePlan.Summary;
+
+    /// <summary>检测附注：被排除的原因、口径限制、不承诺的事项。</summary>
+    public IReadOnlyList<string> CpuOptimizeNotes => _cpuOptimizePlan.Notes;
+
+    /// <summary>是否存在可执行的候选。false 时界面只展示诊断，不给「执行」入口。</summary>
+    public bool HasCpuOptimizeAction => _cpuOptimizePlan.HasExecutableAction;
+
+    /// <summary>检测依据说明：让用户知道建议是从哪几个数推出来的。</summary>
+    public string CpuOptimizeBasis
+    {
+        get
+        {
+            var level = _cpuReport.Level switch
+            {
+                CpuLoadLevel.HighLoad => "持续高负载",
+                CpuLoadLevel.Watch => "持续偏高",
+                CpuLoadLevel.Sampling => "采样中",
+                CpuLoadLevel.Normal => "负载正常",
+                _ => "数据不可用",
+            };
+
+            var avg = _cpuReport.Window.AveragePercent is { } a ? $"{a:F0}%" : "未知";
+            return $"检测依据：负载状态「{level}」，30 秒平均 {avg}，当前 {_cpuReport.CurrentText}；" +
+                   "进程占用取自最近一次差分采样。";
+        }
+    }
+
+    private CpuOptimizePhase _cpuOptimizePhase = CpuOptimizePhase.Idle;
+
+    public CpuOptimizePhase CpuOptimizePhase
+    {
+        get => _cpuOptimizePhase;
+        private set
+        {
+            if (_cpuOptimizePhase == value) return;
+            _cpuOptimizePhase = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CpuOptimizeStatusHex));
+        }
+    }
+
+    /// <summary>状态行颜色：空闲灰、待确认蓝、执行中蓝、完成绿、失败红。</summary>
+    public string CpuOptimizeStatusHex => _cpuOptimizePhase switch
+    {
+        CpuOptimizePhase.Running => "#FF4C8DFF",
+        CpuOptimizePhase.Done => "#FF34C759",
+        CpuOptimizePhase.Failed => "#FFFF453A",
+        CpuOptimizePhase.Ready => "#FF4C8DFF",
+        _ => "#FF5C5F66",
+    };
+
+    private string _cpuOptimizeStatus = "尚未检测";
+
+    /// <summary>流程状态行：检测结果 / 执行中 / 实际结果。失败原因写在这里，不只写「失败」。</summary>
+    public string CpuOptimizeStatus
+    {
+        get => _cpuOptimizeStatus;
+        private set { _cpuOptimizeStatus = value; OnPropertyChanged(); }
+    }
+
+    private string _cpuOptimizeVerifyText = "";
+
+    /// <summary>前后对比结论（同口径、同窗口）。无法对比时如实说明原因。</summary>
+    public string CpuOptimizeVerifyText
+    {
+        get => _cpuOptimizeVerifyText;
+        private set { _cpuOptimizeVerifyText = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>口径说明，与对比结论一起展示。</summary>
+    public string CpuOptimizeCaliberNote => CpuOptimizeVerification.CaliberNote;
+
+    private bool _hasCpuOptimizeChanges;
+
+    /// <summary>是否真的结束过进程。只有为 true 才允许「恢复被结束的进程」。</summary>
+    public bool HasCpuOptimizeChanges
+    {
+        get => _hasCpuOptimizeChanges;
+        private set
+        {
+            if (_hasCpuOptimizeChanges == value) return;
+            _hasCpuOptimizeChanges = value;
+            OnPropertyChanged();
+            RevertCpuOptimizeCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _isCpuOptimizeRunning;
+
+    public bool IsCpuOptimizeRunning
+    {
+        get => _isCpuOptimizeRunning;
+        private set
+        {
+            if (_isCpuOptimizeRunning == value) return;
+            _isCpuOptimizeRunning = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanRunCpuOptimize));
+            OpenCpuOptimizeCommand?.RaiseCanExecuteChanged();
+            RunCpuOptimizeCommand?.RaiseCanExecuteChanged();
+            RevertCpuOptimizeCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>勾选摘要：让用户在执行前再看一眼「会关几个」。</summary>
+    public string CpuOptimizeSelectionText
+    {
+        get
+        {
+            var on = CpuOptimizeItems.Count(i => i.Selected);
+            if (CpuOptimizeItems.Count == 0) return "没有可执行项";
+            return on == 0 ? "尚未勾选，执行按钮不可用" : $"已勾选 {on} 项";
+        }
+    }
+
+    /// <summary>未勾选任何项时不可执行——这是「未经确认不结束进程」的最后一道闸门。</summary>
+    public bool CanRunCpuOptimize => !IsCpuOptimizeRunning && CpuOptimizeItems.Any(i => i.Selected);
+
+    private void OpenCpuOptimize()
+    {
+        if (_router.OpenCpuOptimize()) RaisePageVisibilityChanged();
+
+        // 补一帧：进入流程时必须有当前读数与进程排名，否则「轻量检测」没依据
+        Tick();
+        BuildCpuOptimizePlan();
+
+        // 第一帧通常还没算出进程占用（差分需要两次采样），标记等待并在下一次采样后补检测
+        _cpuOptimizeAwaitingData = !_cpuOptimizePlan.HasExecutableAction;
+
+        CpuOptimizeVerifyText = "";
+        HasCpuOptimizeChanges = _cpuOptimize.HasChanges;
+    }
+
+    private void CloseCpuOptimize()
+    {
+        if (IsCpuOptimizeRunning) return; // 执行中不让退，避免用户以为已经撤销了改动
+        if (_router.CloseCpuOptimize()) RaisePageVisibilityChanged();
+    }
+
+    /// <summary>
+    /// 轻量检测：把现有诊断与进程排名整理成带依据的建议。
+    /// **不做任何系统改动**，也不假装「扫描」了几秒。
+    /// </summary>
+    private void BuildCpuOptimizePlan()
+    {
+        _cpuOptimizePlan = CpuOptimizePlanner.Build(
+            _cpuReport, _lastRanking?.Top, _processCpu.LogicalProcessorCount);
+
+        foreach (var item in CpuOptimizeItems) item.PropertyChanged -= OnCpuOptimizeItemChanged;
+        CpuOptimizeItems.Clear();
+
+        foreach (var item in _cpuOptimizePlan.ExecutableItems)
+        {
+            var view = new CpuOptimizeItemView(item);
+            view.PropertyChanged += OnCpuOptimizeItemChanged;
+            CpuOptimizeItems.Add(view);
+        }
+
+        OnPropertyChanged(nameof(CpuOptimizeSummary));
+        OnPropertyChanged(nameof(CpuOptimizeNotes));
+        OnPropertyChanged(nameof(CpuOptimizeBasis));
+        OnPropertyChanged(nameof(HasCpuOptimizeAction));
+        OnPropertyChanged(nameof(CpuOptimizeSelectionText));
+        OnPropertyChanged(nameof(CanRunCpuOptimize));
+        RunCpuOptimizeCommand.RaiseCanExecuteChanged();
+
+        CpuOptimizePhase = _cpuOptimizePlan.HasExecutableAction
+            ? CpuOptimizePhase.Ready
+            : CpuOptimizePhase.Idle;
+
+        CpuOptimizeStatus = _cpuOptimizePlan.HasExecutableAction
+            ? "轻量检测完成：以下各项默认不勾选，请确认后再执行"
+            : "轻量检测完成：没有可安全执行的 CPU 优化动作，仅提供诊断与建议";
+    }
+
+    private void OnCpuOptimizeItemChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(CpuOptimizeItemView.Selected)) return;
+
+        OnPropertyChanged(nameof(CpuOptimizeSelectionText));
+        OnPropertyChanged(nameof(CanRunCpuOptimize));
+        RunCpuOptimizeCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// 执行勾选项 → 等 5 秒 → 用同一口径回读对比。
+    ///
+    /// 实测结论只写实测到的东西：数字变化、观察窗口、进程是否真的退出。
+    /// 不写「已提升性能」，也不提帧率。
+    /// </summary>
+    private async void RunCpuOptimize()
+    {
+        if (!CanRunCpuOptimize) return;
+
+        var names = CpuOptimizeItems.Where(i => i.Selected).Select(i => i.ProcessName).ToList();
+        if (names.Count == 0) return;
+
+        // 执行前的窗口必须现在就取：执行之后取不到「执行前」的状态
+        var before = _cpuAnalyzer.StatsOver(CpuOptimizeVerification.CompareWindowSeconds);
+
+        IsCpuOptimizeRunning = true;
+        CpuOptimizePhase = CpuOptimizePhase.Running;
+        CpuOptimizeStatus = "正在结束所选应用…";
+        CpuOptimizeVerifyText = "";
+
+        try
+        {
+            var result = await Task.Run(() => _cpuOptimize.Execute(names));
+
+            HasCpuOptimizeChanges = _cpuOptimize.HasChanges;
+            CpuOptimizeStatus = result.Summary;
+
+            if (!result.DidChangeAnything)
+            {
+                CpuOptimizePhase = CpuOptimizePhase.Failed;
+                CpuOptimizeVerifyText = "没有发生系统改动，因此没有前后对比。";
+                return;
+            }
+
+            CpuOptimizeStatus = $"{result.Summary} 正在观察 {CpuOptimizeVerification.CompareWindowSeconds:F0} 秒后回读…";
+
+            // 界面每秒仍在采样，这里只等窗口填满
+            await Task.Delay(TimeSpan.FromSeconds(CpuOptimizeVerification.CompareWindowSeconds + 1));
+
+            var after = _cpuAnalyzer.StatsOver(CpuOptimizeVerification.CompareWindowSeconds);
+            CpuOptimizeVerifyText = CpuOptimizeVerification.DescribeComparison(before, after);
+
+            CpuOptimizePhase = CpuOptimizePhase.Done;
+            CpuOptimizeStatus = "已执行完成，结果以回读数据为准";
+        }
+        catch (Exception ex)
+        {
+            CpuOptimizePhase = CpuOptimizePhase.Failed;
+            CpuOptimizeStatus = $"执行失败：{ex.Message}";
+            CpuOptimizeVerifyText = "执行过程中出现异常，未生成对比结论。";
+        }
+        finally
+        {
+            IsCpuOptimizeRunning = false;
+
+            // 重新检测：被结束的应用已经从进程列表里消失，旧的建议不再成立
+            BuildCpuOptimizePlan();
+        }
+    }
+
+    /// <summary>回读验证失败或用户反悔时，按原路径重新拉起被结束的进程。</summary>
+    private void RevertCpuOptimize()
+    {
+        var failures = _cpuOptimize.Revert();
+        HasCpuOptimizeChanges = _cpuOptimize.HasChanges;
+
+        if (failures.Count == 0)
+        {
+            CpuOptimizePhase = CpuOptimizePhase.Done;
+            CpuOptimizeStatus = "已按原路径重新拉起被结束的进程";
+            CpuOptimizeVerifyText = "恢复只保证「重新启动该程序」，不保证恢复窗口、未保存内容与登录状态。";
+            return;
+        }
+
+        CpuOptimizePhase = CpuOptimizePhase.Failed;
+        CpuOptimizeStatus = "恢复未完成：" + string.Join("；", failures);
+        CpuOptimizeVerifyText = "部分进程未能自动恢复，请手动重新打开。";
     }
 
     private void RefreshAllGameStatus()
@@ -826,6 +1337,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         // 聚合 Steam + WeGame，并剔除 Wallpaper Engine 这类非游戏
         _games = NonGameFilter.Apply(GameLibrary.ScanAll());
+
+        // 游戏 exe 主名供两处复用：白名单排除游戏进程、进程占用列表标记「游戏本体」。
+        // 正在玩的游戏绝不能被列为「可以一键结束」的候选。
+        _gameStems = new HashSet<string>(
+            _games.Select(g => string.IsNullOrWhiteSpace(g.ExecutablePath)
+                    ? null
+                    : Path.GetFileNameWithoutExtension(g.ExecutablePath))
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!),
+            StringComparer.OrdinalIgnoreCase);
 
         if (_games.Count == 0)
         {
@@ -1121,18 +1642,30 @@ public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessmen
 }
 
 /// <summary>白名单中的一个可勾选进程名。</summary>
-public sealed class WhitelistEntry(string name) : INotifyPropertyChanged
+public sealed class WhitelistEntry : INotifyPropertyChanged
 {
-    public string Name { get; } = name;
+    /// <summary>
+    /// 显式构造函数而非主构造函数：<see cref="Icon"/> 的 getter 会捕获主构造参数，
+    /// 编译器为此生成隐藏字段并报 CS9124（参数既被捕获又被用于初始化属性）。
+    /// 换成普通构造函数即可，行为不变。
+    /// </summary>
+    public WhitelistEntry(string name)
+    {
+        Name = name;
+        DisplayName = ProcessDisplayNames.Resolve(name);
+        NameHint = ProcessDisplayNames.HasName(name) ? name : "";
+    }
+
+    public string Name { get; }
 
     /// <summary>看得懂的应用名。白名单里显示这个，而不是 wallpaper64 这种进程名。</summary>
-    public string DisplayName { get; } = ProcessDisplayNames.Resolve(name);
+    public string DisplayName { get; }
 
     /// <summary>与进程名不同时才在界面附注，避免重复显示。</summary>
-    public string NameHint { get; } = ProcessDisplayNames.HasName(name) ? name : "";
+    public string NameHint { get; }
 
     /// <summary>应用图标（来自进程可执行文件）；提取失败时为 null，界面显示首字符色块。</summary>
-    public System.Windows.Media.ImageSource? Icon => AppIconCache.For(name);
+    public System.Windows.Media.ImageSource? Icon => AppIconCache.For(Name);
 
     /// <summary>首字符色块兜底：显示名第一个字符（或进程名首字符）。</summary>
     public string IconFallbackText => (DisplayName.Length > 0 ? DisplayName[0] : '?').ToString();
@@ -1187,4 +1720,101 @@ public enum MemoryOptimizeState
 
     /// <summary>失败。失败原因写在状态行里，不让用户猜。</summary>
     Failed = 3,
+}
+
+/// <summary>CPU 快速优化流程的阶段。只影响状态行颜色与文案，不影响任何系统状态。</summary>
+public enum CpuOptimizePhase
+{
+    /// <summary>尚未检测（或没有可执行项）。</summary>
+    Idle = 0,
+
+    /// <summary>已生成建议，等待用户勾选确认。</summary>
+    Ready = 1,
+
+    /// <summary>正在执行。</summary>
+    Running = 2,
+
+    /// <summary>执行完成并已回读。</summary>
+    Done = 3,
+
+    /// <summary>执行或恢复失败。</summary>
+    Failed = 4,
+}
+
+/// <summary>
+/// 高占用进程列表项。数字每秒原地更新，避免整表重建造成闪烁。
+///
+/// 「受保护」不是建议，而是硬约束：这类进程界面不提供结束入口，
+/// 也不进 <see cref="CpuOptimizePlanner"/> 的候选。
+/// </summary>
+public sealed class ProcessCpuItem(ProcessCpuUsage usage) : INotifyPropertyChanged
+{
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public int ProcessId { get; } = usage.ProcessId;
+    public string Name { get; } = usage.Name;
+
+    /// <summary>看得懂的应用名；没有映射时退回进程名。</summary>
+    public string DisplayName { get; } = ProcessDisplayNames.Resolve(usage.Name);
+
+    private double _percent = usage.CpuPercent;
+    private bool _isProtected = usage.IsProtected;
+    private string? _reason = usage.ProtectionReason;
+
+    public string PercentText => $"{_percent:F1}%";
+    public string ColorHex => OccupancyPalette.ColorHex(OccupancyPalette.Level(_percent));
+
+    public string StatusText => _isProtected
+        ? $"不提供结束操作：{_reason}"
+        : "可在「CPU 优化」里确认后结束";
+
+    public string StatusHex => _isProtected ? "#FF5C5F66" : "#FFFF9F0A";
+
+    /// <summary>进程名与显示名不同时才附注，避免重复显示。</summary>
+    public string NameHint => ProcessDisplayNames.HasName(Name) ? Name : "";
+
+    public void Update(ProcessCpuUsage next)
+    {
+        if (Math.Abs(next.CpuPercent - _percent) >= 0.05)
+        {
+            _percent = next.CpuPercent;
+            PropertyChanged?.Invoke(this, new(nameof(PercentText)));
+            PropertyChanged?.Invoke(this, new(nameof(ColorHex)));
+        }
+
+        if (next.IsProtected == _isProtected && next.ProtectionReason == _reason) return;
+
+        _isProtected = next.IsProtected;
+        _reason = next.ProtectionReason;
+        PropertyChanged?.Invoke(this, new(nameof(StatusText)));
+        PropertyChanged?.Invoke(this, new(nameof(StatusHex)));
+    }
+}
+
+/// <summary>
+/// 一条待确认的优化项。**默认不勾选**——结束进程属于破坏性操作，
+/// 必须由用户逐项主动选择（v0.5.1 的「默认全选」教训）。
+/// </summary>
+public sealed class CpuOptimizeItemView(CpuOptimizeItem item) : INotifyPropertyChanged
+{
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Title => item.Title;
+    public string ProcessName => item.ProcessName ?? "";
+    public string Evidence => item.Evidence;
+    public string Impact => item.Impact;
+    public string RevertText => item.RevertText;
+
+    private bool _selected;
+
+    public bool Selected
+    {
+        get => _selected;
+        set
+        {
+            if (_selected == value) return;
+            _selected = value;
+            PropertyChanged?.Invoke(this, new(nameof(Selected)));
+        }
+    }
 }

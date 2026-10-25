@@ -216,36 +216,41 @@
                                                            HorizontalAlignment="Center"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Center">
-                                                <!-- P 核峰值，点击进入详情页看每颗核 -->
-                                                <Button Command="{Binding OpenCpuDetailCommand}"
-                                                        Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                        ToolTip="点击查看每颗核的占用详情">
-                                                    <Button.Template>
-                                                        <ControlTemplate TargetType="Button">
-                                                            <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="6">
-                                                                <StackPanel HorizontalAlignment="Center">
-                                                                    <views:PercentGauge Width="104" Height="104"
-                                                                                        Value="{Binding CpuCorePercent}"/>
-                                                                    <TextBlock Text="{Binding CpuCoreLabel}"
-                                                                               HorizontalAlignment="Center" Margin="0,10,0,2"
-                                                                               Foreground="{StaticResource TextPrimary}"/>
-                                                                    <TextBlock Text="{Binding CpuCoreHint}"
-                                                                               Style="{StaticResource Faint}"
-                                                                               HorizontalAlignment="Center" TextAlignment="Center"
-                                                                               TextWrapping="Wrap" MaxWidth="130"/>
-                                                                    <TextBlock Text="查看每核 →" FontSize="10"
-                                                                               Foreground="#FF4C8DFF"
-                                                                               HorizontalAlignment="Center" Margin="0,4,0,0"/>
-                                                                </StackPanel>
-                                                            </Border>
-                                                            <ControlTemplate.Triggers>
-                                                                <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="Bd" Property="Background" Value="#FF22242A"/>
-                                                                </Trigger>
-                                                            </ControlTemplate.Triggers>
-                                                        </ControlTemplate>
-                                                    </Button.Template>
-                                                </Button>
+                                                <!--
+                                                  CPU 卡片：显示**整机总体占用率**（不是 P 核峰值），
+                                                  点非按钮区域进 CPU 诊断页。
+                                                  这里用 Border + MouseBinding 而不是「外层 Button 包住内层 Button」：
+                                                  嵌套按钮时点「CPU 优化」会连带触发外层 Click，
+                                                  一次点击跑两条流程（又跳诊断页又开优化）。两个控件是并列的，
+                                                  事件互不牵连，MouseBinding 也不会收到已被内层控件处理掉的点击。
+                                                -->
+                                                <Border Background="Transparent" CornerRadius="10" Padding="6"
+                                                        Cursor="Hand" ToolTip="点击查看 CPU 诊断">
+                                                    <Border.InputBindings>
+                                                        <MouseBinding MouseAction="LeftClick"
+                                                                      Command="{Binding OpenCpuDetailCommand}"/>
+                                                    </Border.InputBindings>
+                                                    <StackPanel HorizontalAlignment="Center">
+                                                        <views:PercentGauge Width="104" Height="104"
+                                                                            Value="{Binding CpuLoadPercent}"
+                                                                            ValueTextOverride="{Binding CpuGaugeText}"/>
+                                                        <TextBlock Text="CPU 占用"
+                                                                   HorizontalAlignment="Center" Margin="0,10,0,2"
+                                                                   Foreground="{StaticResource TextPrimary}"/>
+                                                        <TextBlock Text="{Binding CpuLoadText}"
+                                                                   Style="{StaticResource Faint}"
+                                                                   HorizontalAlignment="Center"/>
+                                                        <TextBlock Text="查看诊断 →" FontSize="10"
+                                                                   Foreground="#FF4C8DFF"
+                                                                   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <Button Content="CPU 优化"
+                                                        Command="{Binding OpenCpuOptimizeCommand}"
+                                                        Padding="16,5" Margin="0,2,0,0"
+                                                        HorizontalAlignment="Center"
+                                                        ToolTip="检测高占用进程，确认后可结束；不修改优先级、亲和性与频率"/>
                                             </StackPanel>
                                         </UniformGrid>
 
@@ -405,9 +410,10 @@
                     </Grid>
 
                     <!--
-                      CPU 详情页
-                      从总览页点击 CPU 仪表进入，与总览页共用同一区域，不改左侧导航。
-                      回答「哪个核在忙」——这是仪表盘给不了的。
+                      CPU 页
+                      从总览页点击 CPU 卡片进入，与总览页共用同一区域，不改左侧导航。
+                      页内二级导航：CPU 诊断（默认）/ 高级详情。
+                      三块内容共用第 1 行，可见性全部由 PageRouter 决定，任一时刻只有一块可见。
                     -->
                     <Grid x:Name="CpuDetailPage"
                           Visibility="{Binding IsCpuDetailVisible, Converter={StaticResource BoolToVisibility}}">
@@ -416,19 +422,243 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
 
-                        <!-- 页头：返回按钮 + 标题 -->
+                        <!-- 页头：返回 + 标题 + 二级导航 -->
                         <Grid Grid.Row="0" Margin="24,20,24,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="0" Content="← 返回" Command="{Binding CloseCpuDetailCommand}"
                                     VerticalAlignment="Center" Margin="0,0,14,0"/>
-                            <TextBlock Grid.Column="1" Text="CPU 详情" Style="{StaticResource H1}"
-                                       VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="CPU" Style="{StaticResource H1}"/>
+                                <TextBlock Text="{Binding CpuModelText}" Style="{StaticResource Faint}"
+                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="CPU 诊断" Command="{Binding ShowCpuDiagnosisCommand}"
+                                        Background="{Binding CpuDiagnosisTabHex}"
+                                        Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"/>
+                                <Button Content="高级详情" Command="{Binding ShowCpuAdvancedCommand}"
+                                        Background="{Binding CpuAdvancedTabHex}"
+                                        Style="{StaticResource PrimaryButton}"/>
+                            </StackPanel>
                         </Grid>
 
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,24">
+                        <!-- ============ 视图一：CPU 诊断（默认） ============ -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,24"
+                                      Visibility="{Binding IsCpuDiagnosisVisible, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <!-- 当前总体占用 + 负载状态 + 采样状态与数据完整性 -->
+                                <Border Style="{StaticResource Card}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <views:PercentGauge Grid.Column="0" Width="112" Height="112"
+                                                            Value="{Binding CpuLoadPercent}"
+                                                            ValueTextOverride="{Binding CpuGaugeText}"/>
+
+                                        <StackPanel Grid.Column="1" Margin="20,0,16,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding CpuReport.Headline}" FontSize="15"
+                                                       FontWeight="SemiBold" TextWrapping="Wrap"
+                                                       Foreground="{Binding CpuLevelHex}"/>
+                                            <TextBlock Text="{Binding CpuReport.AverageText}"
+                                                       Style="{StaticResource Muted}" Margin="0,6,0,0"/>
+                                            <TextBlock Text="{Binding CpuReport.SamplingStatus}"
+                                                       Style="{StaticResource Faint}" Margin="0,4,0,0"/>
+                                            <TextBlock Text="{Binding CpuReport.CompletenessText}"
+                                                       Style="{StaticResource Faint}" TextWrapping="Wrap"
+                                                       Margin="0,2,0,0"/>
+                                        </StackPanel>
+
+                                        <Button Grid.Column="2" Content="CPU 优化"
+                                                Command="{Binding OpenCpuOptimizeCommand}"
+                                                Background="#FF4C8DFF"
+                                                Style="{StaticResource PrimaryButton}"
+                                                VerticalAlignment="Center"
+                                                ToolTip="进入快速优化流程：先检测、再让你确认，最后回读验证"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- 30 秒趋势：横轴按时间排布，漏采会留出空白 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="最近 30 秒总体负载" FontWeight="SemiBold" FontSize="14"/>
+                                        <views:CpuTrendChart Height="120" Margin="0,10,0,0"
+                                                             Points="{Binding CpuTrendPoints}"/>
+                                        <TextBlock Text="虚线为 60% 关注线与 80% 高负载线；空白表示这段时间没有采到数据，不是 0%。"
+                                                   Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 高占用进程：算不出来就说清楚为什么 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="高占用进程" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="{Binding CpuProcessStatus}" Style="{StaticResource Muted}"
+                                                   TextWrapping="Wrap" Margin="0,3,0,8"/>
+
+                                        <ItemsControl ItemsSource="{Binding CpuProcesses}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,0,0,6">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="76"/>
+                                                            <ColumnDefinition Width="210"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="{Binding DisplayName}" FontSize="13"/>
+                                                            <TextBlock Text="{Binding NameHint}"
+                                                                       Style="{StaticResource Faint}"/>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="1" Text="{Binding PercentText}"
+                                                                   Foreground="{Binding ColorHex}"
+                                                                   FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding StatusText}"
+                                                                   Foreground="{Binding StatusHex}"
+                                                                   Style="{StaticResource Faint}"
+                                                                   TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <TextBlock Text="{Binding CpuProcessCaliber}" Style="{StaticResource Faint}"
+                                                   TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 诊断建议：每条都带依据 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="诊断建议" FontWeight="SemiBold" FontSize="14"/>
+                                        <ItemsControl ItemsSource="{Binding CpuReport.Advices}" Margin="0,8,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding}" Style="{StaticResource Muted}"
+                                                               TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- ============ 视图二：快速优化流程 ============ -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,24"
+                                      Visibility="{Binding IsCpuOptimizeVisible, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <!-- 检测依据 + 状态行 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="CPU 快速优化" FontWeight="SemiBold" FontSize="15"/>
+                                        <TextBlock Text="{Binding CpuOptimizeBasis}" Style="{StaticResource Muted}"
+                                                   TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                        <TextBlock Text="{Binding CpuOptimizeSummary}" TextWrapping="Wrap"
+                                                   Margin="0,8,0,0"/>
+                                        <TextBlock Text="{Binding CpuOptimizeStatus}"
+                                                   Foreground="{Binding CpuOptimizeStatusHex}"
+                                                   TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                        <TextBlock Text="{Binding CpuOptimizeVerifyText}"
+                                                   Style="{StaticResource Muted}" TextWrapping="Wrap"
+                                                   Visibility="{Binding CpuOptimizeVerifyText, Converter={StaticResource StringToVisibility}}"
+                                                   Margin="0,8,0,0"/>
+                                        <TextBlock Text="{Binding CpuOptimizeCaliberNote}"
+                                                   Style="{StaticResource Faint}" TextWrapping="Wrap"
+                                                   Margin="0,8,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 待确认的优化项：默认全部不勾选 -->
+                                <Border Style="{StaticResource Card}"
+                                        Visibility="{Binding HasCpuOptimizeAction, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="检测到的优化项（默认不勾选）" FontWeight="SemiBold"
+                                                   FontSize="14"/>
+                                        <ItemsControl ItemsSource="{Binding CpuOptimizeItems}" Margin="0,10,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#FF22242A" CornerRadius="8"
+                                                            Padding="14,10" Margin="0,0,0,8">
+                                                        <StackPanel>
+                                                            <CheckBox Content="{Binding Title}"
+                                                                      IsChecked="{Binding Selected, Mode=TwoWay}"
+                                                                      FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding Evidence}"
+                                                                       Style="{StaticResource Muted}"
+                                                                       TextWrapping="Wrap" Margin="21,6,0,0"/>
+                                                            <TextBlock Text="{Binding Impact}"
+                                                                       Style="{StaticResource Faint}"
+                                                                       TextWrapping="Wrap" Margin="21,4,0,0"/>
+                                                            <TextBlock Text="{Binding RevertText}"
+                                                                       Style="{StaticResource Faint}"
+                                                                       TextWrapping="Wrap" Margin="21,2,0,0"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <Grid Margin="0,6,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding CpuOptimizeSelectionText}"
+                                                       Style="{StaticResource Faint}" VerticalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <Button Content="返回诊断" Command="{Binding CloseCpuOptimizeCommand}"
+                                                        Margin="0,0,8,0"/>
+                                                <Button Content="执行选中项"
+                                                        Command="{Binding RunCpuOptimizeCommand}"
+                                                        Background="#FF4C8DFF"
+                                                        Style="{StaticResource PrimaryButton}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 回滚入口：只有真的结束过进程才出现 -->
+                                <Border Style="{StaticResource Card}"
+                                        Visibility="{Binding HasCpuOptimizeChanges, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="回滚" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="按原路径重新拉起被结束的进程。只保证「重新启动」，不保证恢复窗口、未保存内容与登录状态。"
+                                                   Style="{StaticResource Muted}" TextWrapping="Wrap"
+                                                   Margin="0,6,0,0"/>
+                                        <Button Content="恢复被结束的进程"
+                                                Command="{Binding RevertCpuOptimizeCommand}"
+                                                HorizontalAlignment="Left" Margin="0,10,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 检测附注：被排除的进程、口径限制、不做的事 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="检测附注" FontWeight="SemiBold" FontSize="14"/>
+                                        <ItemsControl ItemsSource="{Binding CpuOptimizeNotes}" Margin="0,8,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding}" Style="{StaticResource Faint}"
+                                                               TextWrapping="Wrap" Margin="0,0,0,5"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- ============ 视图三：高级详情（原有逐核数据） ============ -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,24"
+                                      Visibility="{Binding IsCpuAdvancedVisible, Converter={StaticResource BoolToVisibility}}">
                             <StackPanel>
                                 <!-- 结论：详情页最重要的一行，直接说要不要担心 -->
                                 <Border Style="{StaticResource Card}">
@@ -468,11 +698,34 @@
                                                            TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="{Binding CpuDetail.TotalCpuPercent, StringFormat={}{0:F0}%}"
+                                                <!-- 可空：总 CPU 读不到时显示「未知」，不是 0% -->
+                                                <TextBlock Text="{Binding CpuDetail.TotalCpuText}"
                                                            FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                                                 <TextBlock Text="总 CPU" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
                                                 <TextBlock Text="全部核的平均" Style="{StaticResource Faint}"
                                                            TextAlignment="Center" TextWrapping="Wrap" MaxWidth="120"/>
+                                            </StackPanel>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 硬件信息：型号 / 核心线程。型号读不到就写「未知」，不编占位文本 -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="处理器" FontWeight="SemiBold" FontSize="14"
+                                                   Margin="0,0,0,10"/>
+                                        <UniformGrid Columns="2">
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuModelText}" FontSize="14"
+                                                           FontWeight="SemiBold" TextAlignment="Center"
+                                                           TextWrapping="Wrap" MaxWidth="360"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock Text="型号" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
+                                            </StackPanel>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding CpuCoreCountText}" FontSize="20"
+                                                           FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="核心 / 线程" Style="{StaticResource Muted}" Margin="0,3,0,0"/>
                                             </StackPanel>
                                         </UniformGrid>
                                     </StackPanel>

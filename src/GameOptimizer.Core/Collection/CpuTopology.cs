@@ -56,6 +56,12 @@ public sealed class CpuTopology
     public int EfficiencyProcessorCount => EfficiencyCores.Count;
 
     /// <summary>
+    /// 物理核数量：同一物理核上的两个超线程共享 <see cref="LogicalProcessor.CoreIndex"/>，
+    /// 所以去重后才是「几个核」。高级详情页的「核心 / 线程」用它。
+    /// </summary>
+    public int PhysicalCoreCount => Processors.Select(p => p.CoreIndex).Distinct().Count();
+
+    /// <summary>
     /// 从「逻辑核序号 → 占用率」里取性能核峰值。
     ///
     /// 找不到任何性能核时（拓扑读不到 / 全同构机器的兜底）退化为全局峰值，

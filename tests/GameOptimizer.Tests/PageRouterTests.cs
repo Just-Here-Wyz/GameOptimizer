@@ -241,6 +241,160 @@ public class PageRouterTests
     }
 
     /// <summary>
+    /// CPU 页的二级视图（诊断 / 高级详情 / 快速优化流程）。
+    ///
+    /// 这三个标记都寄居在同一块区域里，必须同时满足两条不变式：
+    /// 1. CPU 页可见时恰好一个子视图可见；
+    /// 2. CPU 页不可见时三个子视图全部不可见。
+    /// 违反任一条，界面上就会出现「诊断和详情叠在一起」这种 v2.1.2 的老毛病。
+    /// </summary>
+    [Fact]
+    public void CPU页默认进入诊断视图()
+    {
+        var r = new PageRouter();
+
+        r.OpenCpuDetail().Should().BeTrue();
+
+        r.CpuTab.Should().Be(CpuView.Diagnosis);
+        r.IsCpuDiagnosisVisible.Should().BeTrue();
+        r.IsCpuAdvancedVisible.Should().BeFalse();
+        r.IsCpuOptimizeVisible.Should().BeFalse();
+    }
+
+    [Fact]
+    public void 高级详情与诊断视图互斥()
+    {
+        var r = new PageRouter();
+        r.OpenCpuDetail();
+
+        r.SelectCpuTab(CpuView.Advanced).Should().BeTrue();
+
+        r.IsCpuAdvancedVisible.Should().BeTrue();
+        r.IsCpuDiagnosisVisible.Should().BeFalse();
+        r.IsCpuDetailVisible.Should().BeTrue("容器仍然可见，只是换了内容");
+    }
+
+    [Fact]
+    public void 打开快速优化时诊断视图必须让位()
+    {
+        // 两块内容共用同一块区域，同时可见就是叠页
+        var r = new PageRouter();
+        r.OpenCpuDetail();
+
+        r.OpenCpuOptimize().Should().BeTrue();
+
+        r.IsCpuOptimizeVisible.Should().BeTrue();
+        r.IsCpuDiagnosisVisible.Should().BeFalse();
+        r.IsCpuAdvancedVisible.Should().BeFalse();
+    }
+
+    [Fact]
+    public void 重复打开优化流程不应产生第二份视图()
+    {
+        // 首页按钮与诊断页按钮都指向同一个入口，连点两次不能变成两层
+        var r = new PageRouter();
+        r.OpenCpuOptimize().Should().BeTrue();
+
+        r.OpenCpuOptimize().Should().BeFalse("状态没有变化");
+        r.IsCpuOptimizeVisible.Should().BeTrue();
+        r.IsCpuDiagnosisVisible.Should().BeFalse();
+    }
+
+    [Fact]
+    public void 切换页签应退出优化流程()
+    {
+        // 页签写着「高级详情」而下面还挂着优化面板会让人分不清自己在哪
+        var r = new PageRouter();
+        r.OpenCpuOptimize();
+
+        r.SelectCpuTab(CpuView.Advanced);
+
+        r.IsCpuOptimizeOpen.Should().BeFalse();
+        r.IsCpuAdvancedVisible.Should().BeTrue();
+    }
+
+    [Fact]
+    public void 关闭优化流程应回到诊断视图()
+    {
+        var r = new PageRouter();
+        r.OpenCpuOptimize();
+
+        r.CloseCpuOptimize().Should().BeTrue();
+
+        r.IsCpuOptimizeVisible.Should().BeFalse();
+        r.IsCpuDiagnosisVisible.Should().BeTrue();
+        r.IsCpuDetailVisible.Should().BeTrue();
+    }
+
+    [Fact]
+    public void 关闭CPU页应一并关掉优化流程()
+    {
+        // 否则「← 返回」回到总览时优化流程还是打开状态，下次进来直接落在中途
+        var r = new PageRouter();
+        r.OpenCpuOptimize();
+
+        r.CloseCpuDetail().Should().BeTrue();
+
+        r.IsCpuDetailVisible.Should().BeFalse();
+        r.IsCpuOptimizeVisible.Should().BeFalse();
+        r.IsOverviewVisible.Should().BeTrue();
+    }
+
+    [Fact]
+    public void 从其它分区打开优化流程应切回总览()
+    {
+        var r = new PageRouter();
+        r.Navigate(AppPage.Settings);
+
+        r.OpenCpuOptimize();
+
+        r.Section.Should().Be(AppPage.Overview);
+        r.IsCpuOptimizeVisible.Should().BeTrue();
+        r.IsSettingsVisible.Should().BeFalse();
+    }
+
+    [Fact]
+    public void 切到外设页时全部CPU子视图都应让位()
+    {
+        var r = new PageRouter();
+        r.OpenCpuOptimize();
+
+        r.Navigate(AppPage.Peripherals);
+
+        r.IsCpuDiagnosisVisible.Should().BeFalse();
+        r.IsCpuOptimizeVisible.Should().BeFalse();
+        r.IsCpuAdvancedVisible.Should().BeFalse();
+        r.IsPeripheralsVisible.Should().BeTrue();
+    }
+
+    [Fact]
+    public void CPU页可见时恰好一个子视图可见()
+    {
+        // 穷举「页签 × 是否在优化流程 × 是否在总览分区」，守「不叠页」这条不变式
+        var views = Enum.GetValues<CpuView>();
+
+        foreach (var view in views)
+        foreach (var optimize in new[] { false, true })
+        foreach (var section in Enum.GetValues<AppPage>())
+        {
+            var r = new PageRouter();
+            r.OpenCpuDetail(view);
+            if (optimize) r.OpenCpuOptimize();
+            r.Navigate(section);
+
+            var visible = new[]
+            {
+                r.IsCpuDiagnosisVisible,
+                r.IsCpuAdvancedVisible,
+                r.IsCpuOptimizeVisible,
+            }.Count(v => v);
+
+            if (r.IsCpuDetailVisible) visible.Should().Be(1, $"{view}(优化={optimize}) → {section}");
+            else visible.Should().Be(0, $"{view}(优化={optimize}) → {section}：CPU 页不可见时子视图也必须收起");
+        }
+    }
+
+    /// <summary>
     /// 源码级防错位：MainWindow.xaml 里导航项的顺序必须与 <see cref="PageRouter"/> 一致。
     ///
     /// 两处顺序一旦写岔，表现是「点下载跳到设置页」——而且编译期完全查不出来，

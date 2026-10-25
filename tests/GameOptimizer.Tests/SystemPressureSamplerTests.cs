@@ -128,6 +128,53 @@ public class SystemPressureSamplerTests
     }
 
     [Fact]
+    public void 单项读取在未初始化时必须报错而不是返回0()
+    {
+        // 首页每秒单独读一次总 CPU，走的是同一个校验入口
+        using var sampler = new SystemPressureSampler();
+
+        var total = () => sampler.ReadTotalCpuPercent();
+        var disk = () => sampler.ReadDiskBytesPerSec();
+
+        total.Should().Throw<InvalidOperationException>().WithMessage("*未就绪*");
+        disk.Should().Throw<InvalidOperationException>().WithMessage("*未就绪*");
+    }
+
+    [Fact]
+    public void 单项读取应给出可空读数且不越界()
+    {
+        // 拆成单项读取是为了让首页只读总 CPU、CPU 页才读磁盘，
+        // 避免同一秒把同一个计数器读两次（NextValue 是区间平均，第二次会失真）
+        using var sampler = new SystemPressureSampler();
+        if (!sampler.Initialize()) return;
+        sampler.Warmup(300);
+
+        if (sampler.HasTotalCpu)
+        {
+            sampler.ReadTotalCpuPercent().Should().NotBeNull();
+            sampler.ReadTotalCpuPercent().Should().BeInRange(0, 100);
+        }
+
+        if (sampler.HasDisk)
+        {
+            sampler.ReadDiskBytesPerSec().Should().NotBeNull();
+            sampler.ReadDiskBytesPerSec().Should().BeGreaterThanOrEqualTo(0);
+        }
+    }
+
+    [Fact]
+    public void 采不到的指标必须是空值而不是0()
+    {
+        // 0 B/s 与「读不到」是两件事：前者代表空闲，后者代表未知
+        using var sampler = new SystemPressureSampler();
+        if (!sampler.Initialize()) return;
+        sampler.Warmup(100);
+
+        if (!sampler.HasDisk) sampler.ReadDiskBytesPerSec().Should().BeNull();
+        if (!sampler.HasTotalCpu) sampler.ReadTotalCpuPercent().Should().BeNull();
+    }
+
+    [Fact]
     public void 吞吐量文本应按量级选单位()
     {
         ThroughputText.Format(1.2 * 1024 * 1024 * 1024).Should().Be("1.2 GB/s");

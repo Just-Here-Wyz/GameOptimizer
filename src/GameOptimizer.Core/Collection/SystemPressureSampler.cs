@@ -6,11 +6,14 @@ using System.Diagnostics;
 /// 一次系统压力采样。
 ///
 /// 只保留两项——其余候选指标实测价值不足，理由见各字段注释与 docs/04-已知限制.md。
+///
+/// 两个字段都是可空的：**采不到就是 null，不是 0**。
+/// 界面据此显示「未知」，不会把一次读取失败画成「磁盘空闲」。
 /// </summary>
 public sealed record SystemPressureFrame(
     long TimestampMs,
-    double DiskBytesPerSec,
-    double TotalCpuPercent);
+    double? DiskBytesPerSec,
+    double? TotalCpuPercent);
 
 /// <summary>吞吐量的可读格式化。纯函数，界面与测试共用同一口径。</summary>
 public static class ThroughputText
@@ -77,6 +80,12 @@ public sealed class SystemPressureSampler : IDisposable
     public IReadOnlyList<string> AvailableMetrics => _available;
     private readonly List<string> _available = [];
 
+    /// <summary>总 CPU 计数器是否可用。首页 CPU 仪表靠它决定显示数字还是「未知」。</summary>
+    public bool HasTotalCpu => _totalCpu is not null;
+
+    /// <summary>磁盘计数器是否可用。</summary>
+    public bool HasDisk => _disks.Count > 0;
+
     public bool Initialize()
     {
         try
@@ -132,16 +141,80 @@ public sealed class SystemPressureSampler : IDisposable
     /// <summary>采一帧。未初始化或未预热时抛异常，不静默返回 0。</summary>
     public SystemPressureFrame Sample(long timestampMs)
     {
-        if (!IsReady) throw new InvalidOperationException($"系统压力采集器未就绪：{LastError}");
-        if (!_warmed) throw new InvalidOperationException("必须先调用 Warmup()，否则首次读数恒为 0。");
-
-        // 各物理盘吞吐求和：用户关心的是「整机磁盘有多忙」
-        var disk = _disks.Sum(SafeRead);
+        EnsureSamplable();
 
         return new SystemPressureFrame(
             timestampMs,
-            DiskBytesPerSec: NonNegative(disk),
-            TotalCpuPercent: PdhSampler.ClampPercent(SafeRead(_totalCpu)));
+            DiskBytesPerSec: ReadDiskBytesPerSec(),
+            TotalCpuPercent: ReadTotalCpuPercent());
+    }
+
+    /// <summary>
+    /// 只读总 CPU 占用。首页 CPU 仪表每秒用它一次——仪表要的是**整机真实总体占用率**，
+    /// 不是 P 核峰值（P 核峰值仍在高级详情里）。
+    ///
+    /// **同一个计数器一秒只能读一次**：`NextValue()` 给的是「距上次读取」这段区间的平均值，
+    /// 同一秒内再读一次算的是极短区间，第二个数字会失真。所以它被拆成单项读取方法，
+    /// 由调用方按页面的可见性决定读哪一项，而不是每次都把两项一起读。
+    /// </summary>
+    /// <returns>读取失败或计数器不存在时返回 null——界面显示「未知」，不用 0 冒充。</returns>
+    public double? ReadTotalCpuPercent()
+    {
+        EnsureSamplable();
+        if (_totalCpu is null) return null;
+
+        try
+        {
+            return PdhSampler.ClampPercent(_totalCpu.NextValue());
+        }
+        catch (Exception ex)
+        {
+            // 失败必须可见：记下来供设置页展示，而不是悄悄给个 0
+            LastError = ex.Message;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 只读磁盘吞吐（各物理盘求和）。只有 CPU 页可见时才需要。
+    /// </summary>
+    /// <returns>全部计数器都读失败时返回 null。</returns>
+    public double? ReadDiskBytesPerSec()
+    {
+        EnsureSamplable();
+        if (_disks.Count == 0) return null;
+
+        var sum = 0.0;
+        var any = false;
+        foreach (var c in _disks)
+        {
+            if (TryRead(c) is not { } value) continue;
+            sum += value;
+            any = true;
+        }
+
+        return any ? NonNegative(sum) : null;
+    }
+
+    private void EnsureSamplable()
+    {
+        if (!IsReady) throw new InvalidOperationException($"系统压力采集器未就绪：{LastError}");
+        if (!_warmed) throw new InvalidOperationException("必须先调用 Warmup()，否则首次读数恒为 0。");
+    }
+
+    /// <summary>读一个计数器；失败或非有限值返回 null（表示「没读到」，不是 0）。</summary>
+    private static double? TryRead(PerformanceCounter? c)
+    {
+        if (c is null) return null;
+        try
+        {
+            var value = c.NextValue();
+            return double.IsNaN(value) || double.IsInfinity(value) ? null : value;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

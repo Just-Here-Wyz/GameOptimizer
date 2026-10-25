@@ -15,6 +15,19 @@ public enum AppPage
 }
 
 /// <summary>
+/// CPU 页面内部的两个二级视图。CPU 页仍然是「总览」分区里的一页，
+/// 二级视图只决定页内显示哪一块，不影响左侧导航。
+/// </summary>
+public enum CpuView
+{
+    /// <summary>CPU 诊断（默认进入的就是它）。</summary>
+    Diagnosis = 0,
+
+    /// <summary>高级详情：型号、核心 / 线程、拓扑、P/E 核分组与逐逻辑处理器。</summary>
+    Advanced = 1,
+}
+
+/// <summary>
 /// 页面导航状态机：**唯一**决定「哪个页面可见」的地方。
 ///
 /// 存在的理由是一次真实事故（v2.1.2 修复）：页面可见性原本由 XAML 绑定与代码后置
@@ -38,14 +51,32 @@ public sealed class PageRouter
     /// <summary>CPU 详情页是否展开。切走再切回来会保持原样，不偷偷关掉。</summary>
     public bool IsCpuDetailOpen { get; private set; }
 
+    /// <summary>
+    /// CPU 页当前选中的二级视图。默认诊断页——用户点首页 CPU 卡片是要看「现在怎么样」，
+    /// 不是先看每颗核的条形图。
+    /// </summary>
+    public CpuView CpuTab { get; private set; } = CpuView.Diagnosis;
+
+    /// <summary>快速优化流程是否展开。它寄居在诊断视图里，是流程而不是第三个页签。</summary>
+    public bool IsCpuOptimizeOpen { get; private set; }
+
     /// <summary>总览页主体。详情页展开时收起——两者共用同一块区域。</summary>
     public bool IsOverviewVisible => Section == AppPage.Overview && !IsCpuDetailOpen;
 
     /// <summary>
-    /// CPU 详情页。只看「是否展开」是不够的：用户展开详情后切到外设，
-    /// 详情页必须跟着让位，否则它会盖在外设页上。
+    /// CPU 页容器。只看「是否展开」是不够的：用户展开后切到外设，
+    /// 容器必须跟着让位，否则它会盖在外设页上。
     /// </summary>
     public bool IsCpuDetailVisible => Section == AppPage.Overview && IsCpuDetailOpen;
+
+    /// <summary>CPU 诊断视图。快速优化展开时让位给它——同一区域只能显示一块内容。</summary>
+    public bool IsCpuDiagnosisVisible => IsCpuDetailVisible && CpuTab == CpuView.Diagnosis && !IsCpuOptimizeOpen;
+
+    /// <summary>快速优化流程视图。</summary>
+    public bool IsCpuOptimizeVisible => IsCpuDetailVisible && CpuTab == CpuView.Diagnosis && IsCpuOptimizeOpen;
+
+    /// <summary>高级详情视图。</summary>
+    public bool IsCpuAdvancedVisible => IsCpuDetailVisible && CpuTab == CpuView.Advanced;
 
     public bool IsPeripheralsVisible => Section == AppPage.Peripherals;
 
@@ -63,23 +94,73 @@ public sealed class PageRouter
         return true;
     }
 
-    /// <summary>打开 CPU 详情页。详情页只属于总览分区，所以顺带切回总览。</summary>
-    public bool OpenCpuDetail()
+    /// <summary>
+    /// 打开 CPU 页。默认进诊断视图；详情页只属于总览分区，所以顺带切回总览。
+    /// 同时关掉快速优化——从首页点进来是要看页面，不是继续上一次的流程。
+    /// </summary>
+    public bool OpenCpuDetail(CpuView view = CpuView.Diagnosis)
     {
-        var changed = Section != AppPage.Overview || !IsCpuDetailOpen;
+        var changed = Section != AppPage.Overview
+                      || !IsCpuDetailOpen
+                      || CpuTab != view
+                      || IsCpuOptimizeOpen;
 
         Section = AppPage.Overview;
         IsCpuDetailOpen = true;
+        CpuTab = view;
+        IsCpuOptimizeOpen = false;
 
         return changed;
     }
 
-    /// <summary>关闭 CPU 详情页（「← 返回」）。返回是否真的发生了变化。</summary>
+    /// <summary>关闭 CPU 页（「← 返回」）。返回是否真的发生了变化。</summary>
     public bool CloseCpuDetail()
     {
         if (!IsCpuDetailOpen) return false;
 
         IsCpuDetailOpen = false;
+        IsCpuOptimizeOpen = false;
+        return true;
+    }
+
+    /// <summary>
+    /// 切换 CPU 页的二级视图（诊断 / 高级详情）。切换即退出快速优化流程，
+    /// 避免「页签已经是详情、下面还挂着优化面板」。
+    /// </summary>
+    public bool SelectCpuTab(CpuView view)
+    {
+        if (!IsCpuDetailOpen) return false;
+        if (CpuTab == view && !IsCpuOptimizeOpen) return false;
+
+        CpuTab = view;
+        IsCpuOptimizeOpen = false;
+        return true;
+    }
+
+    /// <summary>
+    /// 打开快速优化流程。幂等：重复触发返回 false，不会出现两份视图同时可见。
+    /// </summary>
+    public bool OpenCpuOptimize()
+    {
+        var changed = Section != AppPage.Overview
+                      || !IsCpuDetailOpen
+                      || CpuTab != CpuView.Diagnosis
+                      || !IsCpuOptimizeOpen;
+
+        Section = AppPage.Overview;
+        IsCpuDetailOpen = true;
+        CpuTab = CpuView.Diagnosis;
+        IsCpuOptimizeOpen = true;
+
+        return changed;
+    }
+
+    /// <summary>退出快速优化流程，回到诊断视图。</summary>
+    public bool CloseCpuOptimize()
+    {
+        if (!IsCpuOptimizeOpen) return false;
+
+        IsCpuOptimizeOpen = false;
         return true;
     }
 

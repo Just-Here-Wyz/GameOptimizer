@@ -26,6 +26,16 @@ public sealed class PercentGauge : UserControl
         DependencyProperty.Register(nameof(Thickness), typeof(double), typeof(PercentGauge),
             new PropertyMetadata(7.0, OnVisualChanged));
 
+    /// <summary>
+    /// 环中心文字的覆盖值。默认空字符串 = 按百分比画数字。
+    ///
+    /// 存在的理由：CPU 总占用读不到时必须显示「未知」，而环本身只能画数字。
+    /// 用 0% 的环 + 「未知」字样，比画一个 0% 的环诚实——0% 是「测到了空闲」，不是「没测到」。
+    /// </summary>
+    public static readonly DependencyProperty ValueTextOverrideProperty =
+        DependencyProperty.Register(nameof(ValueTextOverride), typeof(string), typeof(PercentGauge),
+            new PropertyMetadata(string.Empty, OnVisualChanged));
+
     public static readonly DependencyProperty TrackBrushProperty =
         DependencyProperty.Register(nameof(TrackBrush), typeof(Brush), typeof(PercentGauge),
             new PropertyMetadata(new SolidColorBrush(Color.FromRgb(0x2A, 0x2C, 0x33)), OnVisualChanged));
@@ -42,6 +52,13 @@ public sealed class PercentGauge : UserControl
     {
         get => (double)GetValue(ThicknessProperty);
         set => SetValue(ThicknessProperty, value);
+    }
+
+    /// <summary>环中心文字覆盖值。空 = 自动画百分比数字。</summary>
+    public string ValueTextOverride
+    {
+        get => (string)GetValue(ValueTextOverrideProperty);
+        set => SetValue(ValueTextOverrideProperty, value);
     }
 
     /// <summary>底色轨道画刷。</summary>
@@ -113,8 +130,12 @@ public sealed class PercentGauge : UserControl
             ? BuildDot(center, radius, startAngle)
             : BuildArc(center, radius, startAngle, maxSweep * percent / 100.0);
 
-        _valueText.Text = $"{percent:F0}";
-        _valueText.FontSize = Math.Max(14, size * 0.26);
+        // 中心文字：有覆盖值（「未知」）就写它，否则写百分比
+        var overrideText = ValueTextOverride;
+        var hasOverride = !string.IsNullOrEmpty(overrideText);
+
+        _valueText.Text = hasOverride ? overrideText : $"{percent:F0}";
+        _valueText.FontSize = Math.Max(12, size * (hasOverride ? 0.18 : 0.26));
         _valueText.Width = size;
         Canvas.SetLeft(_valueText, 0);
         Canvas.SetTop(_valueText, center - _valueText.FontSize * 0.82);

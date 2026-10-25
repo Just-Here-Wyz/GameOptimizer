@@ -271,4 +271,25 @@ public class CpuDetailTests
         (d.PerformanceCore.Bars.Count + d.EfficiencyCore.Bars.Count)
             .Should().BeLessThanOrEqualTo(topology.Processors.Count);
     }
+
+    [Fact]
+    public void 总CPU读不到时应显示未知而不是0()
+    {
+        // 总 CPU 计数器缺失/读取失败时传 null：0% 会被读成「整机空闲」
+        var t = Hybrid();
+        var d = CpuDetail.From(Frame(t, _ => 10), t, null);
+
+        d.TotalCpuPercent.Should().BeNull();
+        d.TotalCpuText.Should().Be("未知");
+    }
+
+    [Fact]
+    public void 总CPU有值时展示文本应带百分号()
+    {
+        var t = Hybrid();
+        var d = CpuDetail.From(Frame(t, _ => 10), t, 37.6);
+
+        d.TotalCpuPercent.Should().Be(37.6);
+        d.TotalCpuText.Should().Be("38%");
+    }
 }
