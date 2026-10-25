@@ -4,6 +4,7 @@
         xmlns:views="clr-namespace:GameOptimizer.App.Views"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="后台进程保护" Height="730" Width="920"
+        Icon="/app.ico"
         MinHeight="480" MinWidth="720"
         WindowStyle="None"
         ResizeMode="CanResize"

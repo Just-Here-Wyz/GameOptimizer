@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:GameOptimizer.App.Views"
         Title="游戏优化助手" Height="760" Width="1180"
+        Icon="/app.ico"
         MinHeight="640" MinWidth="1000"
         WindowStyle="None"
         ResizeMode="CanResize"
@@ -83,11 +84,12 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 应用标识：参考图左上角是圆形图标 + 两行文字 -->
-                <Border Grid.Column="0" Width="22" Height="22" CornerRadius="6" Background="#FF2A2C33"
-                        Margin="16,0,10,0" VerticalAlignment="Center">
-                    <TextBlock Text="优" FontSize="11" Foreground="#FFECEDEF"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <!-- 应用标识：项目 logo（Assets/logo.png） -->
+                <Border Grid.Column="0" Width="22" Height="22" CornerRadius="6"
+                        Margin="16,0,10,0" VerticalAlignment="Center"
+                        ClipToBounds="True" SnapsToDevicePixels="True">
+                    <Image Source="/Assets/logo.png" Width="22" Height="22"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
                 </Border>
 
                 <TextBlock Grid.Column="1" Text="游戏优化助手" FontSize="13" FontWeight="SemiBold"

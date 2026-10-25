@@ -14,6 +14,17 @@
     <UseWindowsForms>true</UseWindowsForms>
     <!-- 内存清理 / 电源计划 / 网络参数需要管理员：清单里声明 requireAdministrator，双击即提权 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 文件图标 / 任务栏 / 资源管理器里的显示图标（多尺寸：16~256） -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 项目 logo：app.ico 给窗口与托盘用，Assets/logo.png 给界面内显示用。
+         SDK 默认把它们当 None，这里改成 Resource 才能用 pack URI 取到。 -->
+    <None Remove="app.ico" />
+    <None Remove="Assets\logo.png" />
+    <Resource Include="app.ico" />
+    <Resource Include="Assets\logo.png" />
+  </ItemGroup>
 
 </Project>

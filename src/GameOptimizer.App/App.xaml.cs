@@ -267,8 +267,34 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    /// <summary>运行时自绘托盘图标：深色圆角方块 + 白色「优」字。</summary>
+    /// <summary>
+    /// 托盘图标：用项目 logo（app.ico 里最接近 16px 的一帧）。
+    /// 资源读不到时退回自绘的「优」字方块——图标缺失不该让程序起不来。
+    /// </summary>
     private static Icon BuildTrayIcon()
+    {
+        try
+        {
+            var resource = Application.GetResourceStream(new Uri("pack://application:,,,/app.ico"));
+            if (resource is not null)
+            {
+                using var stream = resource.Stream;
+                using var loaded = new Icon(stream, new System.Drawing.Size(16, 16));
+
+                // 必须 Clone：原对象与 stream 绑定，stream 释放后就不可再用了
+                return (Icon)loaded.Clone();
+            }
+        }
+        catch
+        {
+            // 落到下面的自绘兜底
+        }
+
+        return DrawFallbackTrayIcon();
+    }
+
+    /// <summary>兜底托盘图标：深色方块 + 白色「优」字（logo 资源不可用时才会用到）。</summary>
+    private static Icon DrawFallbackTrayIcon()
     {
         var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
