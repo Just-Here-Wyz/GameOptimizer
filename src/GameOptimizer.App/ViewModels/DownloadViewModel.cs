@@ -54,7 +54,8 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
             Interval = TimeSpan.FromMilliseconds(500),
         };
         _refreshTimer.Tick += (_, _) => Refresh();
-        _refreshTimer.Start();
+        // 不在构造里启动：只有下载页真正可见时 SetActive(true) 才开表。
+        // 否则用户停在首页，这个 500ms 定时器会从启动一直空转到第一次导航。
 
         Refresh();
     }

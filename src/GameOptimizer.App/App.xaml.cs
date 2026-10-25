@@ -226,6 +226,9 @@ public partial class App : Application
         _window.Show();
         _window.WindowState = WindowState.Normal;
         _window.Activate();
+
+        // 从托盘回来：恢复每秒采集（关闭时被 SetSamplingActive(false) 停掉了）
+        _vm?.SetSamplingActive(true);
     }
 
     /// <summary>关窗口不退出：隐藏到托盘。只有 _reallyExit 时才放行真正关闭。</summary>
@@ -234,6 +237,8 @@ public partial class App : Application
         if (_reallyExit) return;
 
         // 关窗口 = 收进托盘（最初要求：托盘常驻，后台运行）
+        // 同时停掉每秒采集：托盘常驻可能一整天不再打开，没人看的读数纯属白烧 CPU
+        _vm?.SetSamplingActive(false);
         e.Cancel = true;
         _window?.Hide();
     }

@@ -949,10 +949,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
             GameModePhase.Idle);
     }
 
+    /// <summary>
+    /// 界面是否对用户可见。关窗口收进托盘、最小化时都应传 false。
+    ///
+    /// 为什么必须停：本程序常驻托盘，用户关掉窗口后可能一整天不再打开。
+    /// 采样器每秒要为每个逻辑核 + 每个 GPU 3D 引擎实例各读一次 PDH 计数器
+    /// （24 核机器就是 24 次起步，GPU 实例多时上百次），没人看的时候这些读数全是白烧。
+    /// </summary>
+    public void SetSamplingActive(bool active)
+    {
+        if (!SamplerReady) return;
+
+        if (active)
+        {
+            if (!_timer.IsEnabled) _timer.Start();
+            // 立刻补一帧：否则恢复窗口后的第一秒显示的是离开时的旧数据
+            Tick();
+        }
+        else
+        {
+            _timer.Stop();
+            // 下载页的 500ms 刷新同样只在看得见时才有意义
+            Downloads.SetActive(false);
+        }
+    }
+
     /// <summary>停止采集。关窗口时调用，保证游戏模式一定被还原。</summary>
     public void Shutdown()
-    {
-        _timer.Stop();
+    {        _timer.Stop();
 
         // 下载页停刷新并让服务落一次盘：不做的话「退出前最后几秒的进度」会丢
         Downloads.Shutdown();

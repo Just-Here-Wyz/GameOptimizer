@@ -30,7 +30,14 @@ public partial class MainWindow : Window
         if (version is not null)
             VersionText.Text = $"版本 v{version.Major}.{version.Minor}.{version.Build}";
 
-        StateChanged += (_, _) => UpdateMaximizeGlyph();
+        // 最小化时界面不可见：同样停掉每秒采集，恢复时再开。
+        // 托盘隐藏走 App.OnWindowClosing（Hide 不触发 StateChanged，WindowState 仍是 Normal）。
+        StateChanged += (_, _) =>
+        {
+            UpdateMaximizeGlyph();
+            if (DataContext is MainViewModel vm)
+                vm.SetSamplingActive(WindowState != WindowState.Minimized);
+        };
 
         // 窗口可能被重建（托盘「显示主界面」走的就是这条路），
         // ListBox 新建后 SelectedIndex 是 XAML 写死的 0，必须按 ViewModel 当前页面校正，
