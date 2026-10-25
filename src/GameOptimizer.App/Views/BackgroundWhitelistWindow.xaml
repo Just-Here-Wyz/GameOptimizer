@@ -242,7 +242,8 @@
                                         <Border Grid.Column="0" Width="34" Height="34" CornerRadius="8"
                                                 Background="#FF25272E" VerticalAlignment="Center">
                                             <Grid>
-                                                <Image Source="{Binding Icon}" Width="22" Height="22"
+                                                <Image Source="{Binding Icon}" Width="26" Height="26"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                 <TextBlock Text="{Binding IconFallbackText}" FontSize="13"
                                                            Foreground="#FF83868D"
