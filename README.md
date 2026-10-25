@@ -1,12 +1,14 @@
 # 游戏优化助手
 
-> **v2.2.2** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
+> **v2.3.0** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
 
 [完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
 
 ## 直接下载
 
 **[⬇ 下载 v2.2.2（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.2.2)**
+
+> 源码已到 **v2.3.0**，安装包尚未发布；当前可下载的仍是 v2.2.2。
 
 Windows 10 / 11 x64 · 69 MB · **自包含，无需安装 .NET 运行时** · 双击即用
 （程序声明 `requireAdministrator`，启动会弹 UAC）
