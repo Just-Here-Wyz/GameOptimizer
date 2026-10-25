@@ -331,6 +331,72 @@ public class BackgroundProtectionTests
             .Should().Be(BackgroundProcessInfo.UnknownAppName);
     }
 
+    // ---------- 应用名中文化 ----------
+
+    [Fact]
+    public void 文件描述是英文而产品名是中文时显示中文()
+    {
+        // 真实场景：exe 的 FileDescription 写英文，ProductName 才是中文品牌名
+        var metadata = new ProcessFileMetadata(
+            "Some Desktop Helper", "某某桌面助手", "某某科技", "3.1.0");
+
+        BackgroundProcessInspector.ResolveAppName("sdhelper", metadata, identityUnknown: false)
+            .Should().Be("某某桌面助手");
+    }
+
+    [Fact]
+    public void 元数据全英文但内置表有中文名时显示中文()
+    {
+        // Chrome 的版本资源是英文（Google Chrome），直接显示对中文用户不如「Chrome 浏览器」
+        var metadata = new ProcessFileMetadata(
+            "Google Chrome", "Google Chrome", "Google LLC", "141.0");
+
+        BackgroundProcessInspector.ResolveAppName("chrome", metadata, identityUnknown: false)
+            .Should().Be("Chrome 浏览器");
+    }
+
+    [Fact]
+    public void 文件描述本身就是中文时直接用文件描述()
+    {
+        var metadata = new ProcessFileMetadata("微信", "WeChat", "腾讯", "4.1.0");
+
+        BackgroundProcessInspector.ResolveAppName("WeChat", metadata, identityUnknown: false)
+            .Should().Be("微信");
+    }
+
+    [Fact]
+    public void 纯英文软件不被编造中文译名()
+    {
+        // 没有任何来源含中文时保持原文 —— 中文优先 ≠ 一律中文化
+        var metadata = new ProcessFileMetadata("Spotify", "Spotify", "Spotify AB", "1.2");
+
+        BackgroundProcessInspector.ResolveAppName("Spotify", metadata, identityUnknown: false)
+            .Should().Be("Spotify");
+    }
+
+    [Theory]
+    [InlineData("网易云音乐", true)]
+    [InlineData("Chrome 浏览器", true)]
+    [InlineData("Spotify", false)]
+    [InlineData("Microsoft Edge", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void 中文检测只认汉字(string? text, bool expected)
+    {
+        BackgroundProcessInspector.ContainsChinese(text).Should().Be(expected);
+    }
+
+    [Fact]
+    public void 扫描结果不包含系统关键进程()
+    {
+        // 用户要求这类进程不显示（既不保护也不能标记结束，纯噪音）。
+        // 沙箱里进程很少，这条同时锁住契约：只要有结果，就必须都是可管理项。
+        var entries = BackgroundCandidateScan.ScanEntries();
+
+        entries.Should().OnlyContain(e => e.Kind == BackgroundCandidateKind.Endable);
+        entries.Should().OnlyContain(e => e.SystemReason == null);
+    }
+
     // ---------- 搜索与筛选 ----------
 
     private static BackgroundProcessInfo Info(

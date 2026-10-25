@@ -727,12 +727,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>搜索 / 状态筛选后的视图，浮窗直接绑它。</summary>
     public ICollectionView BackgroundProcessesView { get; }
 
+    /// <summary>
+    /// 状态筛选档。系统关键进程由扫描阶段直接剔除（不展示），
+    /// 因此这里不再提供「系统关键」一档——留一个永远筛不出东西的按钮只会让人困惑。
+    /// </summary>
     public IReadOnlyList<BackgroundFilterOption> BackgroundFilters { get; } =
     [
         new(BackgroundListFilter.All, "全部"),
         new(BackgroundListFilter.Protected, "受保护"),
         new(BackgroundListFilter.Unprotected, "未保护"),
-        new(BackgroundListFilter.SystemProtected, "系统关键"),
         new(BackgroundListFilter.Unknown, "无法识别"),
     ];
 
@@ -765,17 +768,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>配置文件真实路径，界面显示出来方便用户手改。</summary>
     public string BackgroundConfigPath => _whitelistStore.FilePath;
 
-    /// <summary>桌面进程总数 / 受保护 / 未保护 / 系统关键 / 无法识别。</summary>
+    /// <summary>列表顶部的计数：总数 / 受保护 / 未保护 / 无法识别。</summary>
     public string BackgroundCountText
     {
         get
         {
             var total = BackgroundProcesses.Count;
             var protectedCount = BackgroundProcesses.Count(e => e.IsProtected);
-            var system = BackgroundProcesses.Count(e => e.IsSystemCritical);
-            var unprotected = total - protectedCount - system;
+            var unprotected = total - protectedCount;
             var unknown = BackgroundProcesses.Count(e => e.IsIdentityUnknown);
-            return $"共 {total} 项 · 受保护 {protectedCount} · 未保护 {unprotected} · 系统关键 {system} · 无法识别 {unknown}";
+            return $"共 {total} 项 · 受保护 {protectedCount} · 未保护 {unprotected} · 无法识别 {unknown}";
         }
     }
 

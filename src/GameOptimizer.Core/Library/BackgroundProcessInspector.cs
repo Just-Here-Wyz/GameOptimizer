@@ -9,7 +9,7 @@ namespace GameOptimizer.Core.Library;
 /// </summary>
 /// <param name="ProcessName">原始进程名（不含 .exe），排查问题的唯一稳定标识。</param>
 /// <param name="ExecutablePath">可执行文件完整路径；读不到为 null。</param>
-/// <param name="AppName">友好应用名：文件描述 → 产品名称 → 内置中文名 → 「未知应用」。</param>
+/// <param name="AppName">友好应用名：优先取含中文的那一个（中文用户认得最快），全都没有中文时按「文件描述 → 产品名称 → 内置名 → 未知应用」。</param>
 /// <param name="FileDescription">exe 版本资源里的文件描述。</param>
 /// <param name="ProductName">exe 版本资源里的产品名称。</param>
 /// <param name="Publisher">发布者：产品信息里的公司名（不是签名主体，界面会标明来源）。</param>
@@ -107,22 +107,52 @@ public static class BackgroundProcessInspector
     }
 
     /// <summary>
-    /// 应用名优先级：文件描述 → 产品名称 → 内置中文名 → 「未知应用」。
+    /// 应用名的优先级：<b>有中文就用中文</b>，然后再按「文件描述 → 产品名称 → 内置名」退化。
     ///
-    /// 先文件描述：它比产品名更贴近用户看到的窗口标题（例如
-    /// 「Google Chrome」→「Google Chrome」，「微信」→「微信」）。
+    /// 为什么中文化优先：用户要在一堆卡片里认出「这是哪个软件」，
+    /// 而中文用户对「网易云音乐」「华为电脑管家」的识别速度远高于
+    /// 「NetEase Cloud Music」「Huawei PC Manager」。同一个 exe 往往既有英文文件描述、
+    /// 又有中文产品名，或者内置表里就有现成中文名——三种来源任意一个含中文，就取它。
+    ///
+    /// 全都没有中文时（纯英文软件，如 Spotify）保持原顺序，
+    /// 绝不为了「看起来像中文」去编造译名。
     /// </summary>
     internal static string ResolveAppName(
         string processName,
         ProcessFileMetadata metadata,
         bool identityUnknown)
     {
+        // 未收录时 Resolve 会退回进程名，那种「中文名」是假的，必须先用 HasName 挡掉
+        var preset = ProcessDisplayNames.HasName(processName)
+            ? ProcessDisplayNames.Resolve(processName)
+            : null;
+
+        var candidates = new[] { metadata.FileDescription, metadata.ProductName, preset };
+        foreach (var candidate in candidates)
+        {
+            if (ContainsChinese(candidate)) return candidate!;
+        }
+
         if (!string.IsNullOrWhiteSpace(metadata.FileDescription)) return metadata.FileDescription!;
         if (!string.IsNullOrWhiteSpace(metadata.ProductName)) return metadata.ProductName!;
-
-        if (ProcessDisplayNames.HasName(processName))
-            return ProcessDisplayNames.Resolve(processName);
+        if (preset is not null) return preset;
 
         return identityUnknown ? BackgroundProcessInfo.UnknownAppName : processName;
+    }
+
+    /// <summary>
+    /// 是否含中日韩统一表意文字。只判汉字基本区与扩展 A，
+    /// 足够覆盖简体中文软件名；标点、日文假名不算，避免把「(R)」之类误判。
+    /// </summary>
+    internal static bool ContainsChinese(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        foreach (var c in text)
+        {
+            if (c is >= '\u4E00' and <= '\u9FFF') return true;
+            if (c is >= '\u3400' and <= '\u4DBF') return true;
+        }
+        return false;
     }
 }

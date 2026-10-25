@@ -16,7 +16,11 @@ public enum BackgroundCandidateKind
     /// <summary>通过五道闸门，可以交给用户保护 / 标记结束。</summary>
     Endable = 0,
 
-    /// <summary>系统关键进程：<b>不允许任何结束操作</b>，列出只为让用户看清它为什么动不了。</summary>
+    /// <summary>
+    /// 系统关键进程：<b>不允许任何结束操作</b>。
+    /// 注意：自 2026-10-25 起扫描不再产出这一类（用户要求不显示），
+    /// 保留该值是为了让安全判据与已有构造调用仍能表达「被系统保护」这个事实。
+    /// </summary>
     SystemProtected = 1,
 }
 
@@ -77,9 +81,12 @@ public sealed record ScanEnvironment(
 /// · **读不到 exe 路径的一律不列**：结束后无法按原路径恢复，
 ///   列出来就是给用户挖坑（反作弊/高权限进程正属此类）。
 ///
-/// 另有一类结果只做展示：<see cref="BackgroundCandidateKind.SystemProtected"/>。
-/// 它们是「本该出现在列表里、但被安全机制拦下」的系统关键进程（资源管理器、桌面窗口管理器等），
-/// 列出来是为了让「系统关键进程不会被结束」这件事在界面上看得见，而不是一句空话。
+/// <b>系统关键进程不进入列表</b>（2026-10-25 调整）：资源管理器、桌面窗口管理器这类
+/// 由安全机制拦下的进程，用户既不能保护也不能标记结束，列出来只是徒增噪音——
+/// 用户的原话是「这些我根本不会去动，别占地方」。
+/// 于是它们现在在扫描阶段就被丢弃：不展示 ≠ 不保护，
+/// 拦截仍然由 <see cref="EssentialProcessGuard"/> 在执行侧独立完成，
+/// 与界面上是否列出来毫无关系。
 /// </summary>
 public static class BackgroundCandidateScan
 {
@@ -212,21 +219,12 @@ public static class BackgroundCandidateScan
                         identity.Name, identity.ExecutablePath, inPreset,
                         BackgroundCandidateKind.Endable, null,
                         identity.IsService || serviceNames.Contains(identity.Name)));
-                    continue;
                 }
 
-                // 只展示「有窗口或属于预设名单」的系统关键进程：
-                // 否则 svchost 这类会把列表撑成一份进程清单，反而没人看。
-                if (!hasWindow && !inPreset) continue;
-                if (facts.SessionId != env.CurrentSessionId) continue;
-
-                if (EssentialProcessGuard.IsEssential(identity, serviceNames, out var reason))
-                {
-                    found.TryAdd(identity.Name, new BackgroundScanEntry(
-                        identity.Name, identity.ExecutablePath, inPreset,
-                        BackgroundCandidateKind.SystemProtected, reason,
-                        identity.IsService || serviceNames.Contains(identity.Name)));
-                }
+                // 没通过闸门的（系统关键进程、已注册服务、系统目录组件、
+                // 其他会话、游戏本体……）一律不进列表：
+                // 它们本来就既不能保护也不能标记结束，列出来只是噪音。
+                // 安全语义不受影响 —— 拦截在执行侧由 EssentialProcessGuard 独立完成。
             }
             catch
             {
