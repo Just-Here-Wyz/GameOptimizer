@@ -18,6 +18,9 @@ public partial class App : Application
     private NotifyIcon? _tray;
     private bool _reallyExit;
 
+    /// <summary>单实例锁。必须常驻字段：被 GC 回收等于主动放开锁，第二个实例就能挤进来。</summary>
+    private SingleInstanceGate? _gate;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -50,9 +53,23 @@ public partial class App : Application
         // 提权保险：清单已声明 requireAdministrator，双击本应直接弹 UAC。
         // 但计划任务、启动器、从已提权宿主派生的子进程都会绕过内嵌清单，
         // 届时界面照开、游戏模式却全被拒绝访问（假成功）。这里主动重启自身补上。
+        //
+        // 顺序很关键：必须先提权重启、再抢单实例锁。
+        // 反过来的话，当前进程握着锁去拉起新进程，新进程会把自己当成「第二个实例」而退出。
         if (TrySelfElevate(e.Args))
         {
             // 新进程已拉起：本进程立即退出，避免两个实例同时改电源计划
+            Shutdown();
+            return;
+        }
+
+        // 单实例：会改电源计划、结束进程，两个实例同时跑会各写各的状态，
+        // 第二个实例还以为「游戏模式未开启」，重复执行一遍开启流程。
+        _gate = SingleInstanceGate.Acquire();
+        if (!_gate.IsFirstInstance)
+        {
+            // 已在运行：把它的窗口从托盘里叫出来，本次启动直接退掉
+            SingleInstanceGate.RequestActivation();
             Shutdown();
             return;
         }
@@ -85,11 +102,11 @@ public partial class App : Application
         if (!ElevationLauncher.ShouldRelaunch(ElevationStatus.IsCurrentProcessElevated(), args))
             return false;
 
-        // 单文件发布时 ProcessPath 就是自身 exe；拿不到说明宿主异常，直接降级运行
+        // 单文件发布时 ProcessPath 就是自身 exe；拿不到或宿主是 dotnet.exe 时直接降级运行
         var exe = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(exe)) return false;
+        if (!ElevationLauncher.CanSelfRelaunch(exe)) return false;
 
-        var psi = new ProcessStartInfo(exe) { UseShellExecute = true, Verb = "runas" };
+        var psi = new ProcessStartInfo(exe!) { UseShellExecute = true, Verb = "runas" };
         foreach (var a in ElevationLauncher.BuildRelaunchArguments(args)) psi.ArgumentList.Add(a);
 
         try
@@ -237,6 +254,8 @@ public partial class App : Application
         _sampler?.Dispose();
         _tray?.Dispose();
         _tray = null;
+        _gate?.Dispose();
+        _gate = null;
         base.OnExit(e);
     }
 

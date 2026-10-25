@@ -70,4 +70,21 @@ public class ElevationLauncherTests
         // 只说「权限不足」用户不知道怎么办；必须给出「右键以管理员身份运行」
         ElevationLauncher.NotElevatedHint.Should().Contain("管理员");
     }
+
+    [Theory]
+    [InlineData(@"C:\Program Files\dotnet\dotnet.exe", false)]
+    [InlineData(@"D:\Apps\GameOptimizer\GameOptimizer.App.exe", true)]
+    public void 只有自身exe才作为重启目标(string path, bool expected)
+    {
+        // `dotnet App.dll` 调试运行时 ProcessPath 是 dotnet.exe：
+        // 照着重启会把整个宿主再拉一遍，程序刚起来就自己退掉
+        ElevationLauncher.CanSelfRelaunch(path).Should().Be(expected);
+    }
+
+    [Fact]
+    public void 拿不到宿主路径时不重启()
+    {
+        ElevationLauncher.CanSelfRelaunch(null).Should().BeFalse();
+        ElevationLauncher.CanSelfRelaunch("").Should().BeFalse();
+    }
 }

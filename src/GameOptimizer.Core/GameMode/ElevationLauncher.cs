@@ -29,6 +29,25 @@ public static class ElevationLauncher
         return !HasRelaunchSwitch(args);
     }
 
+    /// <summary>
+    /// 当前宿主能否作为「重启目标」。
+    ///
+    /// 用 `dotnet GameOptimizer.App.dll` 调试运行时，`Environment.ProcessPath` 是 dotnet.exe，
+    /// 照着重启等于把整个 .NET 宿主再拉一遍（还会对着 dotnet.exe 弹 UAC），
+    /// 结果是调试运行时程序刚起来就自己退掉。这种情况必须跳过自提权——
+    /// 开发/调试本来就不该被 UAC 打断，正式以 exe 启动时才需要。
+    /// </summary>
+    public static bool CanSelfRelaunch(string? processPath)
+    {
+        if (string.IsNullOrWhiteSpace(processPath)) return false;
+
+        var fileName = Path.GetFileNameWithoutExtension(processPath);
+        if (string.Equals(fileName, "dotnet", StringComparison.OrdinalIgnoreCase)) return false;
+
+        // 没有文件名（路径异常）时无法判断，宁可不重启
+        return !string.IsNullOrWhiteSpace(fileName);
+    }
+
     /// <summary>命令行里是否已带哨兵参数（判定不区分大小写，Windows 命令行习惯如此）。</summary>
     public static bool HasRelaunchSwitch(IReadOnlyList<string>? args)
     {

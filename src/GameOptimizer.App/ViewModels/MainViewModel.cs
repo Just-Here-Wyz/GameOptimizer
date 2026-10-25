@@ -2,6 +2,7 @@ namespace GameOptimizer.App.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using GameOptimizer.Core.Analysis;
@@ -92,8 +93,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (_router.CloseCpuDetail()) RaisePageVisibilityChanged();
         });
 
-        LoadWhitelistFromDisk();
+        // 先扫游戏库：白名单扫描要用游戏 exe 名排除游戏进程，
+        // 顺序反了会把正在玩的游戏列进「可结束」候选里
         ScanGames();
+        LoadWhitelistFromDisk();
         RefreshAllGameStatus();
         RefreshPeripherals();
 
@@ -642,44 +645,40 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         WhitelistStatus = Whitelist.Count == 0
             ? "当前没有可结束的后台应用"
-            : $"当前运行 {Whitelist.Count} 项";
+            : _autoDetectedCount > 0
+                ? $"当前运行 {Whitelist.Count} 项（其中 {_autoDetectedCount} 项为自动检测补充，默认不勾选）"
+                : $"当前运行 {Whitelist.Count} 项";
         OnPropertyChanged(nameof(WhitelistSummary));
     }
 
     /// <summary>
-    /// 找出「本机正在运行、且属于可结束范围」的进程名。
-    /// 排除：必要进程（系统服务 / Windows 组件 / 安全软件）、本程序自身。
+    /// 找出「本机正在运行、可以交给用户勾选结束后台」的进程名。
+    ///
+    /// 不再只查内置名单：那样只装名单外软件的用户（音乐客户端、同步盘、厂商工具）
+    /// 白名单永远是空的，界面却显示「游戏模式已开启」，属于假成功。
+    /// 现在的判据见 <see cref="BackgroundCandidateScan"/>：有窗口的用户级进程一律列出。
     /// </summary>
-    private static List<string> DetectRunningCandidates()
+    private List<string> DetectRunningCandidates()
     {
-        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var serviceNames = EssentialProcessGuard.LoadServiceImageNames();
+        // 游戏本体与反作弊必须排除：勾上就等于「开启游戏模式顺手关掉要玩的游戏」
+        var gameStems = _games
+            .Select(g => string.IsNullOrWhiteSpace(g.ExecutablePath)
+                ? null
+                : Path.GetFileNameWithoutExtension(g.ExecutablePath))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s!)
+            .ToList();
 
-        // 预设名单是「可能该关的候选」。不扫描全部进程，
-        // 否则会出现一堆用户没装、也不该由我们处置的进程。
-        foreach (var name in BackgroundProcessWhitelist.Strong)
-        {
-            if (BackgroundProcessWhitelist.IsProtected(name)) continue;
+        var scan = BackgroundCandidateScan.Scan(gameStems);
 
-            System.Diagnostics.Process[] procs;
-            try { procs = System.Diagnostics.Process.GetProcessesByName(name); }
-            catch { continue; }
+        // 预设名单外的项记下来：它们默认不勾选，状态行要说清楚有几项是自动补充的
+        _autoDetectedCount = scan.Count(c => !c.InPreset);
 
-            foreach (var p in procs)
-            {
-                try
-                {
-                    var identity = EssentialProcessGuard.Identify(p);
-                    if (!EssentialProcessGuard.IsEssential(identity, serviceNames))
-                        candidates.Add(name);
-                }
-                catch { }
-                finally { p.Dispose(); }
-            }
-        }
-
-        return [.. candidates];
+        return [.. scan.Select(c => c.ProcessName)];
     }
+
+    /// <summary>本轮扫描中「不在内置名单里、由自动检测补充」的项数。</summary>
+    private int _autoDetectedCount;
 
     private void OnWhitelistEntryChanged(object? sender, PropertyChangedEventArgs e)
     {

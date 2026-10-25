@@ -3,7 +3,9 @@ namespace GameOptimizer.App.Views;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using GameOptimizer.App.ViewModels;
+using GameOptimizer.Core.Library;
 
 /// <summary>
 /// 无系统白框窗口的代码后置：自绘标题栏拖动、双击最大化、三个窗口按钮。
@@ -15,6 +17,8 @@ using GameOptimizer.App.ViewModels;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private HwndSource? _source;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -44,6 +48,49 @@ public partial class MainWindow : Window
 
         var target = vm.CurrentNavIndex;
         if (NavList.SelectedIndex != target) NavList.SelectedIndex = target;
+    }
+
+    /// <summary>
+    /// 挂窗口消息钩子：第二个实例启动时会广播一条唤醒消息，这里负责把窗口顶到前面。
+    /// 必须在 SourceInitialized 之后挂——那时才有真正的 HWND。
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _source = PresentationSource.FromVisual(this) as HwndSource;
+        _source?.AddHook(WndProc);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _source?.RemoveHook(WndProc);
+        _source = null;
+        base.OnClosed(e);
+    }
+
+    /// <summary>
+    /// 收到「已有实例被再次双击」的广播：显示并前置窗口。
+    /// 窗口此时通常是隐藏到托盘的状态（Close 只是 Hide），必须 Show 而不是只 Activate。
+    /// </summary>
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (!SingleInstanceGate.IsActivationMessage(msg)) return IntPtr.Zero;
+
+        handled = true;
+        Dispatcher.BeginInvoke(new Action(BringToFront));
+        return IntPtr.Zero;
+    }
+
+    private void BringToFront()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+
+        // 前台窗口权限被系统限制时 Activate 可能只闪一下任务栏，
+        // 翻一次 Topmost 能把窗口真正顶到最前（前后各一次，不留置顶副作用）。
+        Topmost = true;
+        Topmost = false;
     }
 
     /// <summary>
