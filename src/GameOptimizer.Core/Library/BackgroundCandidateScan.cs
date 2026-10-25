@@ -3,11 +3,37 @@ namespace GameOptimizer.Core.Library;
 using System.Diagnostics;
 
 /// <summary>
-/// 一个「正在运行、可以列入白名单」的应用。
+/// 一个「正在运行、可以交给用户管理」的应用。
 /// </summary>
-/// <param name="ProcessName">进程名（不含 .exe），结束与恢复都用它。</param>
-/// <param name="InPreset">是否属于内置预设名单。预设外的项默认不勾选。</param>
-public sealed record BackgroundCandidate(string ProcessName, bool InPreset);
+/// <param name="ProcessName">进程名（不含 .exe）。结束与恢复都用它。</param>
+/// <param name="InPreset">是否属于内置预设名单（已知的后台大户）。</param>
+/// <param name="ExecutablePath">可执行文件完整路径；规范化前原样保留，用于显示。</param>
+public sealed record BackgroundCandidate(string ProcessName, bool InPreset, string? ExecutablePath = null);
+
+/// <summary>扫描结果的类别：可以结束的候选，还是只用于展示的「系统关键进程」。</summary>
+public enum BackgroundCandidateKind
+{
+    /// <summary>通过五道闸门，可以交给用户保护 / 标记结束。</summary>
+    Endable = 0,
+
+    /// <summary>系统关键进程：<b>不允许任何结束操作</b>，列出只为让用户看清它为什么动不了。</summary>
+    SystemProtected = 1,
+}
+
+/// <summary>一条扫描结果。</summary>
+/// <param name="ProcessName">进程名（不含 .exe）。</param>
+/// <param name="ExecutablePath">可执行文件完整路径，读不到时为 null。</param>
+/// <param name="InPreset">是否属于内置预设名单。</param>
+/// <param name="Kind">可结束候选 / 系统关键进程（只展示）。</param>
+/// <param name="SystemReason">被系统保护的依据，仅 <see cref="BackgroundCandidateKind.SystemProtected"/> 有值。</param>
+/// <param name="IsService">是否以已注册服务身份运行（影响用途识别）。</param>
+public sealed record BackgroundScanEntry(
+    string ProcessName,
+    string? ExecutablePath,
+    bool InPreset,
+    BackgroundCandidateKind Kind,
+    string? SystemReason,
+    bool IsService = false);
 
 /// <summary>
 /// 扫描判据所需的进程事实。全部是纯数据，便于单测。
@@ -31,7 +57,7 @@ public sealed record ScanEnvironment(
     string? SystemRoot = null);
 
 /// <summary>
-/// 找出「本机正在运行、可以交给用户勾选结束后台」的进程。
+/// 找出「本机正在运行、可以交给用户管理」的进程。
 ///
 /// 旧实现只遍历内置预设名单（约 50 个硬编码进程名）去 `GetProcessesByName`。
 /// 结果：装了名单外软件的用户，白名单里永远是空的或严重缺项——
@@ -50,6 +76,10 @@ public sealed record ScanEnvironment(
 /// · 排除游戏进程——把要玩的游戏列进去，一勾就等于自杀；
 /// · **读不到 exe 路径的一律不列**：结束后无法按原路径恢复，
 ///   列出来就是给用户挖坑（反作弊/高权限进程正属此类）。
+///
+/// 另有一类结果只做展示：<see cref="BackgroundCandidateKind.SystemProtected"/>。
+/// 它们是「本该出现在列表里、但被安全机制拦下」的系统关键进程（资源管理器、桌面窗口管理器等），
+/// 列出来是为了让「系统关键进程不会被结束」这件事在界面上看得见，而不是一句空话。
 /// </summary>
 public static class BackgroundCandidateScan
 {
@@ -91,7 +121,7 @@ public static class BackgroundCandidateScan
     /// 进程名是否属于某个已安装游戏。按前缀匹配：
     /// 三角洲实际启动的是 DeltaForceClient-Win64-Shipping，静态扫描只认 DeltaForceClient。
     /// </summary>
-    internal static bool MatchesGame(string processName, IReadOnlySet<string>? gameStems)
+    public static bool MatchesGame(string processName, IReadOnlySet<string>? gameStems)
     {
         if (gameStems is null || gameStems.Count == 0) return false;
 
@@ -112,6 +142,17 @@ public static class BackgroundCandidateScan
     /// </summary>
     /// <param name="gameProcessStems">已安装游戏的 exe 主名，用于排除游戏进程。</param>
     public static IReadOnlyList<BackgroundCandidate> Scan(IEnumerable<string>? gameProcessStems = null)
+        => ScanEntries(gameProcessStems)
+            .Where(e => e.Kind == BackgroundCandidateKind.Endable)
+            .Select(e => new BackgroundCandidate(e.ProcessName, e.InPreset, e.ExecutablePath))
+            .ToList();
+
+    /// <summary>
+    /// 扫描本机，返回全部条目（含只做展示的系统关键进程）。
+    /// 同名多进程合并为一条，路径取第一条能读到的。
+    /// </summary>
+    public static IReadOnlyList<BackgroundScanEntry> ScanEntries(
+        IEnumerable<string>? gameProcessStems = null)
     {
         var preset = new HashSet<string>(BackgroundProcessWhitelist.Strong, StringComparer.OrdinalIgnoreCase);
         var games = new HashSet<string>(
@@ -136,7 +177,7 @@ public static class BackgroundCandidateScan
         }
 
         var env = new ScanEnvironment(serviceNames, games, session);
-        var found = new Dictionary<string, BackgroundCandidate>(StringComparer.OrdinalIgnoreCase);
+        var found = new Dictionary<string, BackgroundScanEntry>(StringComparer.OrdinalIgnoreCase);
 
         // 一次拿到「有顶层窗口的进程」整张表，
         // 避免逐个进程读 MainWindowHandle（两百多次跨进程调用，慢且偶发卡住）
@@ -153,18 +194,39 @@ public static class BackgroundCandidateScan
                 var identity = EssentialProcessGuard.Identify(p);
                 if (string.Equals(identity.Name, selfName, StringComparison.OrdinalIgnoreCase)) continue;
 
+                var hasWindow = windowPids.Contains(p.Id);
+                var inPreset = preset.Contains(identity.Name);
+
                 var facts = new ProcessFacts(
                     identity.Name,
                     identity.SessionId,
                     identity.ExecutablePath,
                     identity.IsService,
-                    windowPids.Contains(p.Id),
-                    preset.Contains(identity.Name));
+                    hasWindow,
+                    inPreset);
 
-                if (!ShouldOffer(facts, env)) continue;
+                if (ShouldOffer(facts, env))
+                {
+                    // 同名多进程（浏览器会开十几个）只算一项
+                    found.TryAdd(identity.Name, new BackgroundScanEntry(
+                        identity.Name, identity.ExecutablePath, inPreset,
+                        BackgroundCandidateKind.Endable, null,
+                        identity.IsService || serviceNames.Contains(identity.Name)));
+                    continue;
+                }
 
-                // 同名多进程（浏览器会开十几个）只算一项
-                found.TryAdd(identity.Name, new BackgroundCandidate(identity.Name, facts.InPreset));
+                // 只展示「有窗口或属于预设名单」的系统关键进程：
+                // 否则 svchost 这类会把列表撑成一份进程清单，反而没人看。
+                if (!hasWindow && !inPreset) continue;
+                if (facts.SessionId != env.CurrentSessionId) continue;
+
+                if (EssentialProcessGuard.IsEssential(identity, serviceNames, out var reason))
+                {
+                    found.TryAdd(identity.Name, new BackgroundScanEntry(
+                        identity.Name, identity.ExecutablePath, inPreset,
+                        BackgroundCandidateKind.SystemProtected, reason,
+                        identity.IsService || serviceNames.Contains(identity.Name)));
+                }
             }
             catch
             {

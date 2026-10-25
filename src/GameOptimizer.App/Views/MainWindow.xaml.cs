@@ -19,6 +19,15 @@ public partial class MainWindow : Window
 {
     private HwndSource? _source;
 
+    /// <summary>后台进程保护浮窗（单实例）。关闭后置空，便于再次打开时重建。</summary>
+    private BackgroundWhitelistWindow? _backgroundWindow;
+
+    /// <summary>浮窗是否因为主窗口收进托盘而被临时隐藏（主窗口回来时要恢复）。</summary>
+    private bool _backgroundWindowHiddenWithOwner;
+
+    /// <summary>当前订阅了事件的 ViewModel。窗口被重建时 DataContext 会换人。</summary>
+    private MainViewModel? _subscribedVm;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -46,6 +55,79 @@ public partial class MainWindow : Window
         // 只在这一处写 NavList.SelectedIndex：它的 SelectionChanged 会回调 ViewModel，
         // 而 PageRouter.Navigate 对「切到同一分区」返回 false，所以校正不会引起递归。
         Loaded += (_, _) => SyncNavSelection();
+
+        // 浮窗的生命周期跟着主窗口：主窗口收进托盘时一起隐藏，回来时再显示。
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible) RestoreBackgroundWindow();
+            else _backgroundWindowHiddenWithOwner = _backgroundWindow?.IsVisible == true;
+        };
+
+        DataContextChanged += (_, _) => AttachViewModel();
+    }
+
+    /// <summary>
+    /// 订阅 ViewModel 的「打开进程管理浮窗」请求。
+    ///
+    /// 窗口由 View 层创建（VM 里不出现 Window 类型）；ViewModel 只是发事件，
+    /// 因此离屏渲染等没有界面的场景不会误开窗口。
+    /// </summary>
+    private void AttachViewModel()
+    {
+        if (_subscribedVm is not null)
+            _subscribedVm.OpenBackgroundManagerRequested -= OnOpenBackgroundManagerRequested;
+
+        _subscribedVm = DataContext as MainViewModel;
+        if (_subscribedVm is not null)
+            _subscribedVm.OpenBackgroundManagerRequested += OnOpenBackgroundManagerRequested;
+    }
+
+    /// <summary>打开（或前置）后台进程保护浮窗。重复触发不会产生第二个窗口。</summary>
+    private void OnOpenBackgroundManagerRequested(object? sender, EventArgs e)
+    {
+        if (_backgroundWindow is { IsLoaded: true })
+        {
+            _backgroundWindowHiddenWithOwner = false;
+            if (_backgroundWindow.WindowState == WindowState.Minimized)
+                _backgroundWindow.WindowState = WindowState.Normal;
+
+            _backgroundWindow.Show();
+            _backgroundWindow.Activate();
+            return;
+        }
+
+        _backgroundWindow = new BackgroundWhitelistWindow
+        {
+            DataContext = DataContext,
+            Owner = this,
+        };
+
+        // 关闭后清空引用：下次点「管理后台进程」重建，避免拿着已关闭窗口继续用
+        _backgroundWindow.Closed += (_, _) =>
+        {
+            _backgroundWindow = null;
+            _backgroundWindowHiddenWithOwner = false;
+        };
+
+        _backgroundWindow.Show();
+    }
+
+    /// <summary>主窗口收进托盘时调用：浮窗一起隐藏，避免留下一个没有主人的窗口。</summary>
+    internal void HideBackgroundWindow()
+    {
+        if (_backgroundWindow is not { IsLoaded: true }) return;
+
+        _backgroundWindowHiddenWithOwner = _backgroundWindow.IsVisible;
+        _backgroundWindow.Hide();
+    }
+
+    private void RestoreBackgroundWindow()
+    {
+        if (!_backgroundWindowHiddenWithOwner) return;
+        if (_backgroundWindow is not { IsLoaded: true }) return;
+
+        _backgroundWindowHiddenWithOwner = false;
+        _backgroundWindow.Show();
     }
 
     /// <summary>把左侧导航的高亮对齐到 ViewModel 当前所在的页面。</summary>
@@ -72,8 +154,21 @@ public partial class MainWindow : Window
     {
         _source?.RemoveHook(WndProc);
         _source = null;
-        base.OnClosed(e);
-    }
+
+        // 主窗口真正关闭（托盘「退出」）时，浮窗必须一起消失：
+        // 否则进程退出会留下一个没有主人的窗口，用户以为程序还在跑。
+        if (_subscribedVm is not null)
+        {
+            _subscribedVm.OpenBackgroundManagerRequested -= OnOpenBackgroundManagerRequested;
+            _subscribedVm = null;
+        }
+
+        // Owner 已设置时 WPF 也会关掉它，这里显式关了更直观；
+        // 判断 IsLoaded 是因为重复 Close 一个已经关闭的窗口会抛异常。
+        if (_backgroundWindow is { IsLoaded: true }) _backgroundWindow.Close();
+        _backgroundWindow = null;
+
+        base.OnClosed(e);    }
 
     /// <summary>
     /// 收到「已有实例被再次双击」的广播：显示并前置窗口。

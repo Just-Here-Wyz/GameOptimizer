@@ -275,95 +275,24 @@
                                             <TextBlock Text="{Binding GameModeStatus}" Style="{StaticResource Muted}"
                                                        Foreground="{Binding GameModeStatusHex}"
                                                        TextWrapping="Wrap" Margin="0,4,16,0"/>
+                                            <!--
+                                              后台进程摘要：面板已挪进独立浮窗（v2.4），
+                                              这里只保留一行结论，用户不必展开就知道自己保护了几个、会关几个。
+                                            -->
+                                            <TextBlock Text="{Binding BackgroundSummaryText}" Style="{StaticResource Faint}"
+                                                       TextWrapping="Wrap" Margin="0,3,16,0"/>
                                         </StackPanel>
-                                        <Button Grid.Column="1" Content="{Binding WhitelistPanelButtonText}"
-                                                Command="{Binding ToggleWhitelistPanelCommand}"
+                                        <Button Grid.Column="1" Content="管理后台进程"
+                                                Command="{Binding OpenBackgroundManagerCommand}"
                                                 Margin="0,0,10,0" VerticalAlignment="Center"
-                                                ToolTip="选择开启游戏模式时要结束的后台应用"/>
+                                                ToolTip="打开独立浮窗：搜索进程、勾选保护、标记结束目标"/>
                                         <Button Grid.Column="2" Content="{Binding GameModeButtonText}"
                                                 Command="{Binding ToggleGameModeCommand}"
                                                 Background="{Binding GameModeButtonHex}"
                                                 Style="{StaticResource PrimaryButton}" VerticalAlignment="Center"
                                                 MinWidth="104"
-                                                ToolTip="开启时会切换到高性能电源计划并结束白名单内的后台进程；再点一次全部还原"/>
+                                                ToolTip="开启时切换到高性能电源计划，并结束已标记为结束目标的后台进程；再点一次全部还原"/>
                                     </Grid>
-                                </Border>
-
-                                <!-- 后台白名单：v1.0.1 起折叠为「白名单设置」按钮展开的面板 -->
-                                <Border Style="{StaticResource Card}"
-                                        Visibility="{Binding IsWhitelistPanelOpen, Converter={StaticResource BoolToVisibility}}">
-                                    <StackPanel>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0">
-                                                <TextBlock Text="开启游戏模式时结束后台" FontWeight="SemiBold" FontSize="14"/>
-                                                <TextBlock Text="{Binding WhitelistSummary}" Style="{StaticResource Muted}"
-                                                           Margin="0,3,0,0"/>
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Button Content="全选" Command="{Binding SelectAllWhitelistCommand}"
-                                                        Margin="0,0,6,0"/>
-                                                <Button Content="全不选" Command="{Binding ClearWhitelistCommand}"
-                                                        Margin="0,0,6,0"/>
-                                                <Button Content="刷新" Command="{Binding ReloadWhitelistCommand}"/>
-                                            </StackPanel>
-                                        </Grid>
-
-                                        <TextBlock Text="{Binding WhitelistStatus}" Style="{StaticResource Faint}"
-                                                   Margin="0,10,0,2"/>
-
-                                        <!--
-                                          候选补全后会变长（本机几十项很常见），
-                                          限高 280 + 内部滚动：否则整个面板会把下面的游戏列表顶出屏幕
-                                        -->
-                                        <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
-                                                      HorizontalScrollBarVisibility="Disabled">
-                                            <ItemsControl ItemsSource="{Binding Whitelist}" Margin="0,4,0,0">
-                                                <ItemsControl.ItemsPanel>
-                                                    <ItemsPanelTemplate>
-                                                        <WrapPanel/>
-                                                    </ItemsPanelTemplate>
-                                                </ItemsControl.ItemsPanel>
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Grid Margin="0,5,20,5" MinWidth="170">
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="Auto"/>
-                                                                <ColumnDefinition Width="*"/>
-                                                            </Grid.ColumnDefinitions>
-                                                            <Border Grid.Column="0" Width="26" Height="26" CornerRadius="6"
-                                                                    Background="#FF25272E" VerticalAlignment="Center">
-                                                                <Grid>
-                                                                    <Image Source="{Binding Icon}" Width="18" Height="18"
-                                                                           HorizontalAlignment="Center"
-                                                                           VerticalAlignment="Center"/>
-                                                                    <TextBlock Text="{Binding IconFallbackText}"
-                                                                               Style="{StaticResource Faint}" FontSize="12"
-                                                                               HorizontalAlignment="Center"
-                                                                               VerticalAlignment="Center"
-                                                                               Visibility="{Binding Icon, Converter={StaticResource NullToCollapsedInverse}}"/>
-                                                                </Grid>
-                                                            </Border>
-                                                            <StackPanel Grid.Column="1" Margin="8,0,0,0"
-                                                                        VerticalAlignment="Center">
-                                                                <CheckBox Content="{Binding DisplayName}"
-                                                                          IsChecked="{Binding Enabled, Mode=TwoWay}"/>
-                                                                <TextBlock Text="{Binding NameHint}" Style="{StaticResource Faint}"
-                                                                           Margin="21,0,0,0"/>
-                                                            </StackPanel>
-                                                        </Grid>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </ScrollViewer>
-
-                                        <TextBlock Text="{Binding WhitelistPath}" Style="{StaticResource Faint}"
-                                                   Margin="0,10,0,0" TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding WhitelistPath}"/>
-                                    </StackPanel>
                                 </Border>
 
                                 <!-- 游戏列表 -->

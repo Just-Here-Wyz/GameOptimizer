@@ -68,7 +68,50 @@ internal static class OffscreenRenderer
             written.Add(path);
         }
 
+        // 后台进程保护浮窗（v2.4）：独立窗口，不在导航里，单独渲染一张
+        if (wanted is null || wanted.Contains(BackgroundPageName))
+        {
+            var path = Path.Combine(outputDirectory, $"page-{BackgroundPageName}.png");
+            RenderBackgroundManager(path);
+            written.Add(path);
+        }
+
         return string.Join(Environment.NewLine, written);
+    }
+
+    /// <summary>浮窗的页面名（--render 的过滤参数用它）。</summary>
+    private const string BackgroundPageName = "background";
+
+    /// <summary>
+    /// 渲染独立浮窗。窗口本身不 Show —— 只把它的内容摘出来排版，
+    /// 否则截图会拍到真实屏幕上那个「当前用户正在用的」窗口。
+    /// </summary>
+    private static void RenderBackgroundManager(string outputPath)
+    {
+        Trace("start background");
+
+        var window = new GameOptimizer.App.Views.BackgroundWhitelistWindow
+        {
+            DataContext = CreateViewModel(),
+        };
+        Trace("bg vm created");
+
+        // 展开第一行的详情，让「完整路径 / 识别依据」这块也进截图；
+        // 并模拟「一行受保护 + 一行结束目标」，把两种态都拍进去
+        if (window.DataContext is GameOptimizer.App.ViewModels.MainViewModel vm)
+        {
+            var rows = vm.BackgroundProcesses;
+            if (rows.Count > 0) rows[0].IsExpanded = true;
+            if (rows.Count > 0) rows[0].IsProtected = true;
+
+            var target = rows.FirstOrDefault(r => r.CanMarkEndTarget && !r.IsProtected);
+            if (target is not null) target.IsEndTarget = true;
+        }
+
+        var content = (UIElement)window.Content;
+        window.Content = null;
+
+        RenderContent(content, window.DataContext, 920, 730, outputPath);
     }
 
     private static void Render(string name, int navIndex, string outputPath)
@@ -103,35 +146,45 @@ internal static class OffscreenRenderer
             ? Math.Clamp(overrideHeight, Height, MaxHeight)
             : Height;
 
+        RenderContent(content, window.DataContext, Width, canvasHeight, outputPath);
+    }
+
+    /// <summary>
+    /// 把一段已从窗口摘下来的内容排版成 PNG。
+    /// 主窗口与浮窗共用这一段：两边的坑（无 PresentationSource 渲染全白、脱离树后丢 DataContext）完全一样。
+    /// </summary>
+    private static void RenderContent(
+        UIElement content, object? dataContext, int width, int height, string outputPath)
+    {
         var host = new Border
         {
-            Width = Width,
-            Height = canvasHeight,
+            Width = width,
+            Height = height,
             Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0C, 0x0E)),
             Child = content,
 
             // 关键：内容从窗口上摘下来后就不再继承窗口的 DataContext，
             // 页面可见性等绑定会全部失效（结果是所有页叠在一起渲染）。
-            DataContext = window.DataContext,
+            DataContext = dataContext,
         };
 
-        host.Measure(new Size(Width, canvasHeight));
-        host.Arrange(new Rect(0, 0, Width, canvasHeight));
+        host.Measure(new Size(width, height));
+        host.Arrange(new Rect(0, 0, width, height));
         host.UpdateLayout();
 
         // 让布局与绑定跑完（数据模板展开、每秒采集的首次刷新都在这一轮）
         PumpDispatcher();
 
-        host.Measure(new Size(Width, canvasHeight));
-        host.Arrange(new Rect(0, 0, Width, canvasHeight));
+        host.Measure(new Size(width, height));
+        host.Arrange(new Rect(0, 0, width, height));
         host.UpdateLayout();
         PumpDispatcher();
 
         // 关键：把宿主挂到一个真正可见的窗口上，否则 RenderTargetBitmap 得到全白
         var shell = new Window
         {
-            Width = Width,
-            Height = canvasHeight,
+            Width = width,
+            Height = height,
             WindowStyle = WindowStyle.None,
             ShowInTaskbar = false,
             Left = -20_000,
@@ -147,7 +200,7 @@ internal static class OffscreenRenderer
         PumpDispatcher();
         Trace("pumped");
 
-        var bitmap = new RenderTargetBitmap(Width, canvasHeight, 96, 96, PixelFormats.Pbgra32);
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
 
         // 先铺一层窗口底色：内容没填满画布时剩下的区域是透明的，
         // 直接存 PNG 会在查看器里显示成白条。
@@ -155,7 +208,7 @@ internal static class OffscreenRenderer
         using (var dc = backdrop.RenderOpen())
         {
             dc.DrawRectangle(
-                new SolidColorBrush(Color.FromRgb(0x0B, 0x0C, 0x0E)), null, new Rect(0, 0, Width, canvasHeight));
+                new SolidColorBrush(Color.FromRgb(0x0B, 0x0C, 0x0E)), null, new Rect(0, 0, width, height));
         }
 
         bitmap.Render(backdrop);
@@ -235,6 +288,11 @@ internal static class OffscreenRenderer
 
             // 每次渲染都用全新的空任务表：截图不该带上某个人的真实下载记录
             new GameOptimizer.Core.Download.DownloadStore(
-                Path.Combine(Path.GetTempPath(), "go-render-downloads.json")));
+                Path.Combine(Path.GetTempPath(), "go-render-downloads.json")),
+
+            // 保护名单同样用临时文件：截图过程中会模拟勾选保护，
+            // 绝不能写到使用者真实的 background-whitelist.json 里
+            new GameOptimizer.Core.Library.BackgroundWhitelistStore(
+                Path.Combine(Path.GetTempPath(), "go-render-whitelist.json")));
     }
 }

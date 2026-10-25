@@ -41,22 +41,59 @@ public static class EssentialProcessGuard
     /// <param name="identity">进程身份。</param>
     /// <param name="serviceNames">已注册服务的主程序名集合（不含 .exe）。</param>
     public static bool IsEssential(ProcessIdentity identity, IReadOnlySet<string>? serviceNames = null)
+        => IsEssential(identity, serviceNames, out _);
+
+    /// <summary>
+    /// 同上，并给出<b>判定依据</b>。界面要回答「为什么它是系统关键进程」，
+    /// 界面文案与判据必须来自同一处，否则迟早对不上。
+    /// </summary>
+    public static bool IsEssential(
+        ProcessIdentity identity,
+        IReadOnlySet<string>? serviceNames,
+        out string? reason)
     {
-        if (string.IsNullOrWhiteSpace(identity.Name)) return true;
+        reason = null;
+
+        if (string.IsNullOrWhiteSpace(identity.Name))
+        {
+            reason = "进程名为空，无法识别";
+            return true;
+        }
 
         // 1. 硬编码兜底名单：系统外壳、安全软件、输入法、本程序
-        if (BackgroundProcessWhitelist.IsProtected(identity.Name)) return true;
+        if (BackgroundProcessWhitelist.IsProtected(identity.Name))
+        {
+            reason = "受保护名单（系统外壳 / 安全软件 / 输入法 / 本程序）";
+            return true;
+        }
 
         // 2. Session 0 = 服务会话。桌面应用永远不在这个会话里，
         //    在这里结束任何东西都是在动服务栈。
-        if (identity.SessionId == 0) return true;
+        if (identity.SessionId == 0)
+        {
+            reason = "系统服务会话（Session 0）";
+            return true;
+        }
 
         // 3. 已知服务的主程序
-        if (identity.IsService) return true;
-        if (serviceNames is not null && serviceNames.Contains(identity.Name)) return true;
+        if (identity.IsService)
+        {
+            reason = "已注册的 Windows 服务";
+            return true;
+        }
+
+        if (serviceNames is not null && serviceNames.Contains(identity.Name))
+        {
+            reason = "已注册的 Windows 服务";
+            return true;
+        }
 
         // 4. Windows 自带组件
-        if (IsUnderSystemRoot(identity.ExecutablePath, SystemRoot)) return true;
+        if (IsUnderSystemRoot(identity.ExecutablePath, SystemRoot))
+        {
+            reason = "Windows 系统组件（位于系统目录）";
+            return true;
+        }
 
         return false;
     }

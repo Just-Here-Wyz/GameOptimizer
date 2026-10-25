@@ -240,6 +240,9 @@ public partial class App : Application
         // 同时停掉每秒采集：托盘常驻可能一整天不再打开，没人看的读数纯属白烧 CPU
         _vm?.SetSamplingActive(false);
         e.Cancel = true;
+
+        // 浮窗跟着一起隐藏：否则主界面收进托盘后，屏幕角落会留一个「没有主人」的窗口
+        _window?.HideBackgroundWindow();
         _window?.Hide();
     }
 
@@ -301,11 +304,14 @@ public partial class App : Application
     private static extern bool DestroyIcon(IntPtr hIcon);
 
     /// <summary>
-    /// 组装游戏模式：关闭不必要的后台进程 + 释放闲置内存。
+    /// 组装游戏模式：关闭用户标记为结束目标的后台进程 + 释放闲置内存。
     ///
     /// 刻意不包含「显卡性能偏好」——核显机器上没有可调度的独立 GPU，
     /// 写那个注册表键不会有任何效果，属于看着优化了实则空转的项。
-    /// 白名单与力度由用户可改（见 BackgroundWhitelistSettings）。
+    ///
+    /// 结束进程的初始名单是<b>空</b>：v2.4 起「勾选」表示保护，没有勾选不等于要结束，
+    /// 真正要结束哪些由用户显式标记，进入游戏模式前从 <see cref="MainViewModel"/> 同步过来。
+    /// 用默认名单打底会重演 v0.5.1 的事故（一点开启就关掉用户正在用的软件）。
     ///
     /// 内存清理用 AddOptional 注册：受限环境下可能整轮被拒（全部 AccessDenied），
     /// 属于锦上添花的一项，不该让用户连电源计划都开不起来；失败进 Warnings 上报界面。
@@ -314,7 +320,7 @@ public partial class App : Application
     {
         var mode = new GameModeController(new GameModeStateStore());
         mode.Add(new PowerPlanAction());
-        mode.Add(new EndProcessAction(BackgroundProcessWhitelist.Default));
+        mode.Add(new EndProcessAction([]));
         mode.AddOptional(new MemoryCleanAction());
         return mode;
     }

@@ -251,20 +251,37 @@ public sealed class GameDvrAction : IGameModeAction
     }
 }
 
-/// <summary>结束白名单内的后台进程。必须在回滚时如实告知"进程无法自动恢复"。</summary>
+/// <summary>
+/// 结束白名单内的后台进程。必须在回滚时如实告知"进程无法自动恢复"。
+///
+/// <b>语义</b>（v2.4 起）：「白名单」在这里指<b>用户显式标记的结束目标</b>，
+/// 不是「勾选保护的项」。保护项由 <c>ProtectedNames</c> 单独传入并在此处再拦一次——
+/// 界面已经把它们排除在目标之外，这里再拦是为了防止任何调用方绕过界面直接结束受保护进程
+/// （「界面写受保护、实际仍被结束」是本次改造明确要杜绝的事）。
+/// </summary>
 public sealed class EndProcessAction : IGameModeAction
 {
     private readonly List<KilledProcess> _killed = [];
     private readonly List<BlockedProcess> _blocked = [];
     private readonly List<BlockedProcess> _skipped = [];
     private readonly List<RestoredProcess> _restored = [];
+    private readonly HashSet<string> _protected;
     private IReadOnlySet<string>? _serviceNames;
 
-    public IReadOnlyList<string> Whitelist { get; }
-    public string Name => "关闭后台干扰进程";
-    public string Description => "结束白名单内的浏览器、壁纸引擎、管家遥测等；关闭游戏模式时自动恢复。";
+    public EndProcessAction(IReadOnlyList<string> whitelist, IEnumerable<string>? protectedNames = null)
+    {
+        Whitelist = whitelist;
+        _protected = new HashSet<string>(
+            protectedNames ?? [], StringComparer.OrdinalIgnoreCase);
+    }
 
-    public EndProcessAction(IReadOnlyList<string> whitelist) => Whitelist = whitelist;
+    public IReadOnlyList<string> Whitelist { get; }
+
+    /// <summary>用户勾选保护的进程名。即使出现在 <see cref="Whitelist"/> 里也一律不结束。</summary>
+    public IReadOnlyList<string> ProtectedNames => [.. _protected];
+
+    public string Name => "关闭后台干扰进程";
+    public string Description => "结束你标记为结束目标的后台程序；勾选保护的一律不动，关闭游戏模式时自动恢复。";
 
     /// <summary>本动作实际结束掉的进程。</summary>
     public IReadOnlyList<KilledProcess> Killed => _killed;
@@ -282,12 +299,20 @@ public sealed class EndProcessAction : IGameModeAction
     /// <summary>尝试结束但被拒绝访问的进程。</summary>
     public IReadOnlyList<BlockedProcess> Blocked => _blocked;
 
+    /// <summary>
+    /// 用户勾选保护、因而被拦下的进程（即使调用方把名字放进了目标列表）。
+    /// 正常情况下为空——界面算目标时已排除；非空说明有调用方绕过了界面。
+    /// </summary>
+    public IReadOnlyList<BlockedProcess> ProtectedSkipped => _protectedSkipped;
+    private readonly List<BlockedProcess> _protectedSkipped = [];
+
     public void Apply()
     {
         _killed.Clear();
         _blocked.Clear();
         _skipped.Clear();
         _restored.Clear();
+        _protectedSkipped.Clear();
 
         _serviceNames ??= EssentialProcessGuard.LoadServiceImageNames();
 
@@ -295,6 +320,13 @@ public sealed class EndProcessAction : IGameModeAction
         {
             // 硬编码兜底名单：连进程都不必枚举
             if (BackgroundProcessWhitelist.IsProtected(name)) continue;
+
+            // 用户勾选保护的项：无论调用方怎么传，都不结束
+            if (_protected.Contains(name))
+            {
+                _protectedSkipped.Add(new BlockedProcess(name, ProtectedReason));
+                continue;
+            }
 
             Process[] targets;
             try { targets = Process.GetProcessesByName(name); }
@@ -307,9 +339,9 @@ public sealed class EndProcessAction : IGameModeAction
                     // 按客观特征判断必要进程：Session 0、注册服务、系统目录下的组件。
                     // 这类直接跳过，不能只靠名字白名单——写死的名单永远会漏。
                     var identity = EssentialProcessGuard.Identify(p);
-                    if (EssentialProcessGuard.IsEssential(identity, _serviceNames))
+                    if (EssentialProcessGuard.IsEssential(identity, _serviceNames, out var reason))
                     {
-                        _skipped.Add(new BlockedProcess(name, DescribeEssential(identity)));
+                        _skipped.Add(new BlockedProcess(name, reason ?? "系统必要进程"));
                         continue;
                     }
 
@@ -359,6 +391,8 @@ public sealed class EndProcessAction : IGameModeAction
 
     private const string StuckReason = "进程仍在运行";
 
+    private const string ProtectedReason = "已勾选保护";
+
     /// <summary>
     /// Kill 并回读确认结果。Kill 抛出的异常由调用方 catch 统一处理。
     /// </summary>
@@ -384,16 +418,6 @@ public sealed class EndProcessAction : IGameModeAction
         // 说明 Kill 没生效（例如被安全软件挂起），不得报成功。
         if (p.WaitForExit(5000)) return KillResult.Exited;
         return p.WaitForExit(500) ? KillResult.Exited : KillResult.Stuck;
-    }
-
-    private static string DescribeEssential(EssentialProcessGuard.ProcessIdentity identity)
-    {
-        if (identity.SessionId == 0) return "系统服务会话";
-        if (identity.IsService) return "已注册服务";
-        if (EssentialProcessGuard.IsUnderSystemRoot(identity.ExecutablePath,
-                Environment.GetFolderPath(Environment.SpecialFolder.Windows)))
-            return "Windows 系统组件";
-        return "系统必要进程";
     }
 
     /// <summary>
@@ -447,6 +471,9 @@ public sealed class EndProcessAction : IGameModeAction
 
             if (_skipped.Count > 0)
                 text += $"（自动跳过 {_skipped.Count} 项系统必要进程）";
+
+            if (_protectedSkipped.Count > 0)
+                text += $"（跳过 {_protectedSkipped.Count} 项你已保护的进程）";
 
             var stuck = _blocked.Count(b => b.Reason == StuckReason);
             var denied = _blocked.Count - stuck;
