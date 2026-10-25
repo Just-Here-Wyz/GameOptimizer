@@ -19,6 +19,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly SystemPressureSampler _pressure = new();
     private bool _pressureReady;
     private readonly GameModeController _gameMode;
+
+    /// <summary>
+    /// 游戏模式动作的互斥锁：开启/关闭已挪到后台线程，而托盘退出会在 UI 线程同时还原，
+    /// 两个线程碰同一份动作列表就会出现「半边回滚」。所有进入点都必须拿这把锁。
+    /// </summary>
+    private readonly object _gameModeGate = new();
     private readonly BackgroundWhitelistStore _whitelistStore = new();
     private readonly PeripheralScanner _peripherals = new();
     private readonly MemoryCleanAction _memoryClean = new();
@@ -65,7 +71,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _timer.Tick += (_, _) => Tick();
 
         ScanGamesCommand = new RelayCommand(_ => { ScanGames(); RefreshAllGameStatus(); });
-        ToggleGameModeCommand = new RelayCommand(_ => ToggleGameMode());
+        ToggleGameModeCommand = new RelayCommand(
+            _ => ToggleGameMode(),
+            _ => GameModeButtonPresentation.CanToggle(IsGameModeToggling));
         ToggleWhitelistPanelCommand = new RelayCommand(_ => IsWhitelistPanelOpen = !IsWhitelistPanelOpen);
         SelectAllWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(true));
         ClearWhitelistCommand = new RelayCommand(_ => SetAllWhitelist(false));
@@ -479,12 +487,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _gameModeStatus = "游戏模式：未开启";
     public string GameModeStatus { get => _gameModeStatus; private set { _gameModeStatus = value; OnPropertyChanged(); } }
 
+    /// <summary>状态行颜色：进行中蓝、已开启绿、失败红、空闲灰。</summary>
+    public string GameModeStatusHex => GameModeButtonPresentation.StatusHex(GameModePhase);
+
+    private GameModePhase _gameModePhase = GameModePhase.Idle;
+    public GameModePhase GameModePhase
+    {
+        get => _gameModePhase;
+        private set
+        {
+            if (_gameModePhase == value) return;
+            _gameModePhase = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(GameModeStatusHex));
+        }
+    }
+
     private bool _isGameModeOn;
     public bool IsGameModeOn
     {
         get => _isGameModeOn;
         private set
         {
+            if (_isGameModeOn == value) return;
             _isGameModeOn = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(GameModeButtonText));
@@ -492,10 +517,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public string GameModeButtonText => IsGameModeOn ? "关闭游戏模式" : "开启游戏模式";
+    private bool _isGameModeToggling;
 
-    /// <summary>开启后按钮变红色（用户要求），关闭态恢复蓝色主按钮色。</summary>
-    public string GameModeButtonHex => IsGameModeOn ? "#FFFF453A" : "#FF4C8DFF";
+    /// <summary>
+    /// 正在开启/关闭。开启要切电源计划并结束后台进程，实测以秒计；
+    /// 这期间按钮禁用并显示「开启中…」，否则界面冻结会被当成「点了没反应」。
+    /// </summary>
+    public bool IsGameModeToggling
+    {
+        get => _isGameModeToggling;
+        private set
+        {
+            if (_isGameModeToggling == value) return;
+            _isGameModeToggling = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsGameModeBusy));
+            OnPropertyChanged(nameof(GameModeButtonText));
+            OnPropertyChanged(nameof(GameModeButtonHex));
+            ToggleGameModeCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>按钮可用性的反向只读视图，XAML 里绑 IsEnabled 用。</summary>
+    public bool IsGameModeBusy => _isGameModeToggling;
+
+    /// <summary>处理中的方向：true = 正在开启。决定「开启中…」还是「关闭中…」。</summary>
+    private bool _gameModeEntering;
+
+    public string GameModeButtonText =>
+        GameModeButtonPresentation.ButtonText(_isGameModeToggling, IsGameModeOn, _gameModeEntering);
+
+    /// <summary>开启后按钮变红色（用户要求），处理中压暗，关闭态恢复蓝色主按钮色。</summary>
+    public string GameModeButtonHex =>
+        GameModeButtonPresentation.ButtonBackgroundHex(_isGameModeToggling, IsGameModeOn);
 
     /// <summary>白名单设置面板的展开状态。</summary>
     private bool _isWhitelistPanelOpen;
@@ -790,47 +844,68 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _gameLibrarySummary = "";
     public string GameLibrarySummary { get => _gameLibrarySummary; private set { _gameLibrarySummary = value; OnPropertyChanged(); } }
 
-    private void ToggleGameMode()
+    /// <summary>
+    /// 开启 / 关闭游戏模式。
+    ///
+    /// 必须在后台线程执行：powercfg 要起两次进程（各等 3 秒上限），
+    /// 结束白名单进程时每个还要等 5 秒确认退出，内存清理还要遍历全机进程。
+    /// 同步跑会把 UI 线程按在地上，按钮连按下的视觉反馈都画不出来——
+    /// 用户以为没点上，恢复后队列里的点击会连开带关，状态彻底乱掉。
+    /// </summary>
+    private async void ToggleGameMode()
     {
-        if (IsGameModeOn)
+        if (!GameModeButtonPresentation.CanToggle(IsGameModeToggling)) return;
+
+        var entering = !IsGameModeOn;
+
+        // 白名单同步必须在 UI 线程做：它读的是界面上的 ObservableCollection
+        if (entering) ApplyWhitelistToGameMode();
+
+        _gameModeEntering = entering;
+        IsGameModeToggling = true;
+        GameModePhase = GameModePhase.Working;
+        GameModeStatus = GameModeButtonPresentation.WorkingStatus(entering);
+
+        try
         {
-            var errors = _gameMode.ExitWithReport().ToList();
-            IsGameModeOn = false;
+            var outcome = await Task.Run(() => entering ? EnterGameMode() : ExitGameMode());
 
-            // 关闭时按原路径恢复被结束的进程（用户要求），结果必须如实上报
-            var restored = 0;
-            var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
-            if (action is not null)
-            {
-                restored = action.RestoredCount;
-                errors.AddRange(action.FailedRestores.Select(r =>
-                    $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
-            }
-
-            if (errors.Count == 0)
-            {
-                GameModeStatus = restored > 0
-                    ? $"游戏模式：已关闭，已恢复 {restored} 个进程"
-                    : "游戏模式：已关闭，改动已还原";
-            }
-            else
-            {
-                GameModeStatus = "⚠ 游戏模式已关闭，但有项未还原：" + string.Join("；", errors);
-            }
-            return;
+            IsGameModeOn = outcome.Active;
+            GameModeStatus = outcome.Status;
+            GameModePhase = outcome.Phase;
+        }
+        catch (Exception ex)
+        {
+            // 各动作内部异常已由 GameModeController 收集；走到这里说明是更外层的意外，
+            // 同样不能沉默——按钮必须回到可点状态，并说清哪一步炸了。
+            GameModePhase = GameModePhase.Failed;
+            GameModeStatus = $"游戏模式：{(entering ? "开启" : "关闭")}时出现异常 — {ex.Message}";
+        }
+        finally
+        {
+            IsGameModeToggling = false;
         }
 
-        // 每次开启前把界面上的勾选同步过去，用户刚改的白名单立刻生效
-        ApplyWhitelistToGameMode();
+        // 结果落在仪表盘上：切换结束后用户能立刻看到内存/CPU 变化。
+        // 采样失败不影响切换结论，所以单独兜住——不能让刷新异常冒泡成崩溃。
+        try { Tick(); } catch { /* 采样异常已在 Tick 内记录，这里只防万一 */ }
+    }
 
-        var enterErrors = _gameMode.Enter();
-        IsGameModeOn = _gameMode.IsActive;
+    /// <summary>一次切换的最终结果，回 UI 线程再灌进绑定属性。</summary>
+    private sealed record GameModeOutcome(bool Active, string Status, GameModePhase Phase);
 
-        if (enterErrors.Count > 0)
-        {
-            GameModeStatus = "游戏模式：开启失败并已回滚 — " + string.Join("；", enterErrors);
-            return;
-        }
+    /// <summary>在后台线程执行开启，返回值只含纯数据，不碰 UI。</summary>
+    private GameModeOutcome EnterGameMode()
+    {
+        // 与 Shutdown（托盘退出）互斥：否则「点完开启立刻退出」会让两个线程同时改动作列表
+        lock (_gameModeGate) return EnterGameModeCore();
+    }
+
+    private GameModeOutcome EnterGameModeCore()
+    {
+        var errors = _gameMode.Enter();
+        if (errors.Count > 0)
+            return new(false, "游戏模式：开启失败并已回滚 — " + string.Join("；", errors), GameModePhase.Failed);
 
         // 不能只说「已开启」：必须让用户看到结束了几个进程。
         var killed = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
@@ -841,7 +916,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_gameMode.Warnings.Count > 0)
             detail += "；" + string.Join("；", _gameMode.Warnings);
 
-        GameModeStatus = $"游戏模式：已开启{detail}；关闭时自动恢复这些进程";
+        return new(_gameMode.IsActive,
+            $"游戏模式：已开启{detail}；关闭时自动恢复这些进程",
+            GameModePhase.On);
+    }
+
+    /// <summary>在后台线程执行关闭：按原路径恢复被结束的进程，失败项逐条上报。</summary>
+    private GameModeOutcome ExitGameMode()
+    {
+        lock (_gameModeGate) return ExitGameModeCore();
+    }
+
+    private GameModeOutcome ExitGameModeCore()
+    {
+        var errors = _gameMode.ExitWithReport().ToList();
+
+        var restored = 0;
+        var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
+        if (action is not null)
+        {
+            restored = action.RestoredCount;
+            errors.AddRange(action.FailedRestores.Select(r =>
+                $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
+        }
+
+        if (errors.Count > 0)
+            return new(false, "⚠ 游戏模式已关闭，但有项未还原：" + string.Join("；", errors), GameModePhase.Failed);
+
+        return new(false,
+            restored > 0
+                ? $"游戏模式：已关闭，已恢复 {restored} 个进程"
+                : "游戏模式：已关闭，改动已还原",
+            GameModePhase.Idle);
     }
 
     /// <summary>停止采集。关窗口时调用，保证游戏模式一定被还原。</summary>
@@ -854,17 +960,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (_gameMode.IsActive)
         {
-            // 退出时同样触发进程恢复；失败与恢复数量如实写入状态行
-            var errors = _gameMode.ExitWithReport().ToList();
-            var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
-            if (action is not null)
+            // 与后台的开启/关闭互斥：用户可能「点完开启立刻托盘退出」，
+            // 不等那一轮跑完就会对着半套状态做还原。lock 会把退出拖到本轮结束，值得。
+            lock (_gameModeGate)
             {
-                errors.AddRange(action.FailedRestores.Select(r =>
-                    $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
-            }
+                if (!_gameMode.IsActive) return;
 
-            if (errors.Count > 0)
-                GameModeStatus = "⚠ 还原未完成：" + string.Join("；", errors);
+                // 退出时同样触发进程恢复；失败与恢复数量如实写入状态行
+                var errors = _gameMode.ExitWithReport().ToList();
+                var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
+                if (action is not null)
+                {
+                    errors.AddRange(action.FailedRestores.Select(r =>
+                        $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
+                }
+
+                if (errors.Count > 0)
+                    GameModeStatus = "⚠ 还原未完成：" + string.Join("；", errors);
+            }
         }
     }
 }

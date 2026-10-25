@@ -268,6 +268,7 @@
                                         <StackPanel Grid.Column="0">
                                             <TextBlock Text="游戏模式" FontSize="14" FontWeight="SemiBold"/>
                                             <TextBlock Text="{Binding GameModeStatus}" Style="{StaticResource Muted}"
+                                                       Foreground="{Binding GameModeStatusHex}"
                                                        TextWrapping="Wrap" Margin="0,4,16,0"/>
                                         </StackPanel>
                                         <Button Grid.Column="1" Content="{Binding WhitelistPanelButtonText}"
@@ -277,7 +278,9 @@
                                         <Button Grid.Column="2" Content="{Binding GameModeButtonText}"
                                                 Command="{Binding ToggleGameModeCommand}"
                                                 Background="{Binding GameModeButtonHex}"
-                                                Style="{StaticResource PrimaryButton}" VerticalAlignment="Center"/>
+                                                Style="{StaticResource PrimaryButton}" VerticalAlignment="Center"
+                                                MinWidth="104"
+                                                ToolTip="开启时会切换到高性能电源计划并结束白名单内的后台进程；再点一次全部还原"/>
                                     </Grid>
                                 </Border>
 

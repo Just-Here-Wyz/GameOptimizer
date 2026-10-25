@@ -1,6 +1,7 @@
 namespace GameOptimizer.App;
 
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows;
 using GameOptimizer.App.ViewModels;
@@ -46,6 +47,16 @@ public partial class App : Application
         // 因此不能用 OnMainWindowClose——主窗口一关进程就没了。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+        // 提权保险：清单已声明 requireAdministrator，双击本应直接弹 UAC。
+        // 但计划任务、启动器、从已提权宿主派生的子进程都会绕过内嵌清单，
+        // 届时界面照开、游戏模式却全被拒绝访问（假成功）。这里主动重启自身补上。
+        if (TrySelfElevate(e.Args))
+        {
+            // 新进程已拉起：本进程立即退出，避免两个实例同时改电源计划
+            Shutdown();
+            return;
+        }
+
         RecoverFromAbnormalExit();
 
         _sampler = new PdhSampler();
@@ -61,6 +72,48 @@ public partial class App : Application
         _window.Show();
 
         CreateTrayIcon();
+    }
+
+    /// <summary>
+    /// 未提权时带 UAC 重启自身。返回 true 表示「新进程已拉起，本进程应立刻退出」。
+    ///
+    /// 用户取消 UAC 不算错误：程序继续以普通权限运行，由界面如实标注受限项，
+    /// 比直接退出更符合预期（用户至少能看到发生了什么）。
+    /// </summary>
+    private static bool TrySelfElevate(string[] args)
+    {
+        if (!ElevationLauncher.ShouldRelaunch(ElevationStatus.IsCurrentProcessElevated(), args))
+            return false;
+
+        // 单文件发布时 ProcessPath 就是自身 exe；拿不到说明宿主异常，直接降级运行
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exe)) return false;
+
+        var psi = new ProcessStartInfo(exe) { UseShellExecute = true, Verb = "runas" };
+        foreach (var a in ElevationLauncher.BuildRelaunchArguments(args)) psi.ArgumentList.Add(a);
+
+        try
+        {
+            Process.Start(psi);
+            return true;
+        }
+        catch (Win32Exception ex) when (ElevationLauncher.IsUserCancelled(ex.NativeErrorCode))
+        {
+            MessageBox.Show(
+                "已取消管理员授权，程序将以普通权限继续运行。\n\n" +
+                "游戏模式会关闭进程、切换电源计划，这些操作在普通权限下会失败，届时界面会如实提示。",
+                "游戏优化助手 — 未提权",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"以管理员身份启动失败：{ex.Message}\n\n程序将以普通权限继续运行，游戏模式可能无法生效。",
+                "游戏优化助手 — 提权失败",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
     }
 
     /// <summary>

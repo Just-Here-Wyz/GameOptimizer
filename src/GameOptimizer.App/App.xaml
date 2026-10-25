@@ -94,16 +94,41 @@
             <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <!-- 默认焦点虚线框在深色圆角按钮上很难看，去掉 -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="7"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                Padding="{TemplateBinding Padding}"
+                                RenderTransformOrigin="0.5,0.5" SnapsToDevicePixels="True">
+                            <Grid>
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <!--
+                                  按下反馈：叠一层半透明黑 + 整体缩到 96%。
+                                  不直接改 Background —— 游戏模式按钮的底色是动态绑定的，
+                                  模板触发器里再设一次会盖掉绑定值（点完就只剩一种颜色）。
+                                -->
+                                <Border x:Name="Press" Background="#40000000" CornerRadius="7"
+                                        Opacity="0" IsHitTestVisible="False"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.88"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.9"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.96" ScaleY="0.96"/>
+                                    </Setter.Value>
+                                </Setter>
+                                <Setter TargetName="Press" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <!-- 执行中禁用：压暗 + 光标还原，让「点不动」本身成为反馈 -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.55"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
