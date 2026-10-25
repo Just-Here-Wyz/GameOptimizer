@@ -25,9 +25,6 @@ public enum KillBlockReason
     /// <summary>通过全部检查（但仍要等用户启动游戏模式才会执行）。</summary>
     None = 0,
 
-    /// <summary>没被标记为结束目标。</summary>
-    NotMarked = 1,
-
     /// <summary>用户勾选了保护。</summary>
     ProtectedByUser = 2,
 
@@ -46,7 +43,6 @@ public sealed record BackgroundTargetFacts(
     string Name,
     string? ExecutablePath,
     bool IsProtectedByUser,
-    bool IsEndTarget,
     bool IsSystemEssential,
     bool IsIdentityUnknown,
     bool MatchesGame = false)
@@ -58,14 +54,23 @@ public sealed record BackgroundTargetFacts(
 public sealed record KillVerdict(bool Eligible, KillBlockReason Reason, string Explanation);
 
 /// <summary>
-/// 「选中即保护」的唯一判据。
+/// 「勾选即保护，其余默认结束」的唯一判据。
 ///
-/// 这个类存在的理由：旧实现里「勾选」等于「要结束」，语义反了，而且没有单独一处
-/// 能回答「它到底会不会被关」。现在把所有判断收在这里，界面状态、存储内容、
-/// 结束动作的目标集合全部从同一处推导，避免出现「界面写受保护、实际仍然被结束」。
+/// 语义演进（2026-10-25 第二次调整，用户明确要求）：
+/// <list type="number">
+/// <item>v2.3 及以前：勾选 = 会被结束（最易点错，已废弃）；</item>
+/// <item>v2.4 初版：勾选 = 保护，另需显式「标记为结束目标」（安全但繁琐，用户嫌麻烦）；</item>
+/// <item><b>当前</b>：勾选 = 保护，<b>没勾的默认就是结束目标</b>——
+///       用户只需要挑出「不能动的那几个」，其余交给游戏模式。</item>
+/// </list>
 ///
-/// 判定顺序即优先级：先说「你保护了」，再说「系统不让」，再说「拉不回来」，
-/// 最后才说「没标记」——这样界面上的解释永远是最贴近用户意图的那条。
+/// 代价必须说清楚：现在默认会结束所有未被保护的候选，
+/// 因此<b>四道安全闸门比以往更重要</b>——系统关键进程（会话 / 注册服务 / 系统目录 / 保护名单）、
+/// 游戏本体与反作弊、读不到路径的进程、用户勾选的保护项，全都拦得住。
+/// 只有「有窗口的用户级程序」且能读到 exe 路径的才会真正进入结束名单，
+/// 而且仍然只有用户启动游戏模式时才执行，结束后按原路径恢复。
+///
+/// 判定顺序即优先级：先说「你保护了」，再说「系统不让」，再说「这是游戏」，再说「拉不回来」。
 /// </summary>
 public static class BackgroundProtectionPolicy
 {
@@ -96,29 +101,8 @@ public static class BackgroundProtectionPolicy
     }
 
     /// <summary>
-    /// 能不能被标记为「结束目标」。界面据此决定按钮是否可点，
-    /// 这就是需求里「只有通过现有安全检查的进程才有资格成为结束候选」。
-    /// </summary>
-    public static KillVerdict DecideMarkable(BackgroundTargetFacts facts)
-    {
-        if (facts.IsProtectedByUser)
-            return new(false, KillBlockReason.ProtectedByUser, "已勾选保护，不能同时标记为结束目标");
-
-        if (facts.IsSystemEssential)
-            return new(false, KillBlockReason.SystemProtected, "系统关键进程，不允许标记为结束目标");
-
-        if (!facts.HasPath)
-            return new(false, KillBlockReason.MissingPath, "读不到可执行文件路径，结束后无法自动恢复");
-
-        if (facts.MatchesGame)
-            return new(false, KillBlockReason.GameProcess, "这是游戏本体或反作弊进程，不在结束范围内");
-
-        return new(true, KillBlockReason.None, "可以标记为结束目标（仍需你启动游戏模式才会执行）");
-    }
-
-    /// <summary>
     /// 最终判定：这个进程在本次游戏模式里会不会被结束。
-    /// <b>只有 Eligible 为 true 的名字才会进入 <c>EndProcessAction</c>。</b>
+    /// <b>没勾保护且通过全部检查的，就在结束名单里。</b>
     /// </summary>
     public static KillVerdict Decide(BackgroundTargetFacts facts)
     {
@@ -134,10 +118,7 @@ public static class BackgroundProtectionPolicy
         if (!facts.HasPath)
             return new(false, KillBlockReason.MissingPath, "读不到可执行文件路径，结束后无法自动恢复");
 
-        if (!facts.IsEndTarget)
-            return new(false, KillBlockReason.NotMarked, "未标记为结束目标，不会被结束");
-
-        return new(true, KillBlockReason.None, "已标记结束且通过全部安全检查；只有启动游戏模式时才会执行");
+        return new(true, KillBlockReason.None, "未勾选保护，启动游戏模式时会结束它（关闭游戏模式时按原路径恢复）");
     }
 
     /// <summary>
@@ -215,7 +196,8 @@ public static class BackgroundProcessFilter
 /// 从一批候选里算出「本次游戏模式真正会结束的名字」。
 ///
 /// 单独拎出来是为了让「界面显示」与「实际执行」共用同一个结果：
-/// 界面展示的结束目标数 == 传给 <see cref="GameMode.EndProcessAction"/> 的名单长度。
+/// 界面展示的结束数量 == 传给 <see cref="GameMode.EndProcessAction"/> 的名单长度。
+/// 现在这条名单默认就是「所有没勾保护、且通过安全检查的候选」。
 /// </summary>
 public static class BackgroundKillPlan
 {

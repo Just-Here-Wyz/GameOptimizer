@@ -5,16 +5,16 @@ using GameOptimizer.Core.GameMode;
 using GameOptimizer.Core.Library;
 
 /// <summary>
-/// 「选中即保护」的语义用例（v2.4）。
+/// 「勾选即保护，其余默认结束」的语义用例（v2.4 第三次调整）。
 ///
-/// 这一组锁的是本次改造最核心的一句话：
-/// <b>勾选 = 保护；未勾选 ≠ 立即结束</b>。
+/// 这一组锁的是当前唯一口径：
+/// <b>勾选 = 绝不结束；没勾 = 默认会被结束（仍须过完所有安全检查）</b>。
 ///
-/// 每条用例都对应一个真实的误操作场景：
+/// 每条用例都对应一个真实场景：
 /// · 勾了保护却仍被结束 → 用户再也不敢用这个功能；
-/// · 取消勾选就被结束 → 等于「点一下复选框就杀进程」；
-/// · 未勾选就自动结束 → 重演 v0.5.1「默认全选，一点就关了壁纸引擎」；
-/// · 系统进程被当成普通项 → 一次误关牵动整个服务栈。
+/// · 取消勾选时立刻杀进程 → 等于「点一下复选框就杀进程」，绝对不能有；
+/// · 未勾选的系统进程 / 游戏本体被结束 → 一次误关牵动整个服务栈或直接断开游戏；
+/// · 读不到路径的进程被结束 → 结束后拉不回来，用户只能重启。
 /// </summary>
 public class BackgroundProtectionTests
 {
@@ -22,19 +22,17 @@ public class BackgroundProtectionTests
         string name = "cloudmusic",
         string? path = @"D:\Apps\Music\cloudmusic.exe",
         bool isProtected = false,
-        bool isEndTarget = true,
         bool systemEssential = false,
         bool identityUnknown = false,
         bool matchesGame = false)
-        => new(name, path, isProtected, isEndTarget, systemEssential, identityUnknown, matchesGame);
+        => new(name, path, isProtected, systemEssential, identityUnknown, matchesGame);
 
-    // ---------- 1. 选中即保护 ----------
+    // ---------- 1. 勾选即保护 ----------
 
     [Fact]
     public void 勾选保护的进程绝不会被结束()
     {
-        // 即使历史配置里它还留着结束标记，保护也必须压过标记
-        var facts = Facts(isProtected: true, isEndTarget: true);
+        var facts = Facts(isProtected: true);
 
         var verdict = BackgroundProtectionPolicy.Decide(facts);
 
@@ -45,51 +43,62 @@ public class BackgroundProtectionTests
     }
 
     [Fact]
-    public void 勾选保护后同一进程立即退出结束目标名单()
+    public void 勾选保护后同一进程立即退出结束名单()
     {
-        var before = Facts(isProtected: false, isEndTarget: true);
+        var before = Facts(isProtected: false);
         BackgroundKillPlan.Resolve([before]).Should().BeEquivalentTo(["cloudmusic"]);
 
         var after = before with { IsProtectedByUser = true };
         BackgroundKillPlan.Resolve([after]).Should().BeEmpty();
     }
 
-    // ---------- 2. 取消勾选不等于立即结束 ----------
+    // ---------- 2. 没勾保护 = 默认结束 ----------
 
     [Fact]
-    public void 取消勾选不会立即结束进程()
+    public void 未勾保护的普通进程默认就在结束名单里()
     {
-        // 取消保护只是恢复「未保护」，没有任何一条路径会因此去结束它
-        var facts = Facts(isProtected: false, isEndTarget: false);
+        var facts = Facts("cloudmusic", @"D:\Apps\Music\cloudmusic.exe");
 
         var verdict = BackgroundProtectionPolicy.Decide(facts);
 
-        verdict.Eligible.Should().BeFalse();
-        verdict.Reason.Should().Be(KillBlockReason.NotMarked);
-        BackgroundKillPlan.Resolve([facts]).Should().BeEmpty();
+        verdict.Eligible.Should().BeTrue();
+        verdict.Reason.Should().Be(KillBlockReason.None);
+        BackgroundKillPlan.Resolve([facts]).Should().BeEquivalentTo(["cloudmusic"]);
     }
 
     [Fact]
-    public void 多个未保护且未标记的进程一个都不会被结束()
+    public void 多个未保护进程全部进入结束名单()
     {
         var targets = new[]
         {
-            Facts("chrome", isEndTarget: false),
-            Facts("WeChat", isEndTarget: false),
-            Facts("wallpaper64", isEndTarget: false),
+            Facts("chrome"),
+            Facts("WeChat"),
+            Facts("wallpaper64", @"D:\Apps\Wallpaper\wallpaper64.exe"),
         };
 
-        BackgroundKillPlan.Resolve(targets).Should().BeEmpty();
+        BackgroundKillPlan.Resolve(targets)
+            .Should().BeEquivalentTo(["chrome", "WeChat", "wallpaper64"]);
     }
 
-    // ---------- 3. 未勾选的普通进程仍须通过全部安全检查 ----------
+    [Fact]
+    public void 取消勾选只是改状态_不会立即结束进程()
+    {
+        // 语义上取消保护 = 回到「下次会被结束」，但没有任何一条路径会当场杀进程：
+        // 结束只发生在 EndProcessAction.Apply（用户启动游戏模式）里。
+        var facts = Facts(isProtected: false);
+
+        BackgroundProtectionPolicy.Decide(facts).Eligible.Should().BeTrue(
+            "取消勾选后它确实进入结束范围，但执行时机仍然只由「启动游戏模式」触发");
+    }
+
+    // ---------- 3. 未勾选仍须通过全部安全检查 ----------
 
     [Theory]
     [InlineData("nopath", null, false)]          // 读不到路径 → 结束后拉不回来
     [InlineData("DeltaForceClient-Win64", @"D:\Games\DeltaForce\client.exe", true)] // 游戏本体
-    public void 未勾选只是有资格_仍须通过安全检查(string name, string? path, bool isGame)
+    public void 未勾选也必须通过安全检查(string name, string? path, bool isGame)
     {
-        var facts = Facts(name, path, isProtected: false, isEndTarget: false, matchesGame: isGame);
+        var facts = Facts(name, path, isProtected: false, matchesGame: isGame);
 
         var verdict = BackgroundProtectionPolicy.Decide(facts);
 
@@ -97,26 +106,14 @@ public class BackgroundProtectionTests
         verdict.Reason.Should().Be(isGame ? KillBlockReason.GameProcess : KillBlockReason.MissingPath);
     }
 
-    [Fact]
-    public void 只有标记过的普通进程才会进入结束名单()
-    {
-        var facts = new[]
-        {
-            Facts("chrome", isEndTarget: false),
-            Facts("wallpaper64", isEndTarget: true),
-        };
-
-        BackgroundKillPlan.Resolve(facts).Should().BeEquivalentTo(["wallpaper64"]);
-    }
-
     // ---------- 4. 必要进程即使未勾选也不能结束 ----------
 
     [Fact]
     public void 系统必要进程即使未勾选也拦得住()
     {
-        // 未勾选保护 + 还留着结束标记，仍然必须由安全机制拦下
+        // 这是新语义下最关键的一条：默认全结束，安全机制必须兜住
         var facts = Facts("SomeVendorService", @"C:\Program Files\Vendor\svc.exe",
-            isProtected: false, isEndTarget: true, systemEssential: true);
+            isProtected: false, systemEssential: true);
 
         var verdict = BackgroundProtectionPolicy.Decide(facts);
 
@@ -125,52 +122,29 @@ public class BackgroundProtectionTests
         BackgroundKillPlan.Resolve([facts]).Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData("explorer")]      // 系统外壳
-    [InlineData("MsMpEng")]       // 安全软件
-    [InlineData("ctfmon")]        // 输入法
-    public void 硬编码保护名单内的进程不能被标记为结束目标(string name)
-    {
-        var facts = Facts(name, @"C:\Program Files\App\app.exe", isEndTarget: false);
-
-        BackgroundProtectionPolicy.DecideMarkable(facts with { IsSystemEssential = true })
-            .Eligible.Should().BeFalse();
-    }
-
-    // ---------- 5. 未知进程默认不勾选且不会被自动结束 ----------
+    // ---------- 5. 未知进程的行为 ----------
 
     [Fact]
-    public void 未知进程默认既不保护也不结束()
+    public void 身份未知但路径可读的进程仍会被结束_风险必须让用户看得见()
     {
-        var facts = Facts("0dcloud", @"D:\Apps\Unknown\0dcloud.exe",
-            isProtected: false, isEndTarget: false, identityUnknown: true);
-
-        var verdict = BackgroundProtectionPolicy.Decide(facts);
-
-        verdict.Eligible.Should().BeFalse();
-        verdict.Reason.Should().Be(KillBlockReason.NotMarked);
-        BackgroundKillPlan.Resolve([facts]).Should().BeEmpty();
-    }
-
-    [Fact]
-    public void 未知进程同样可以被用户显式标记后再结束()
-    {
-        // 「未知」不等于「不可管理」，但必须由用户明确点一次
-        var facts = Facts("0dcloud", @"D:\Apps\Unknown\0dcloud.exe",
-            isProtected: false, isEndTarget: true, identityUnknown: true);
+        // 新语义的直接后果：认不出是什么的进程，只要没勾保护就会被结束。
+        // 界面上因此必须显示「未知应用 / 用途未知」并允许一键全部保护。
+        var facts = Facts("0dcloud", @"D:\Apps\Unknown\0dcloud.exe", identityUnknown: true);
 
         BackgroundProtectionPolicy.Decide(facts).Eligible.Should().BeTrue();
         BackgroundKillPlan.Resolve([facts]).Should().BeEquivalentTo(["0dcloud"]);
     }
 
     [Fact]
-    public void 读不到路径的未知进程连标记都不允许()
+    public void 读不到路径的未知进程绝不会被结束()
     {
-        var facts = Facts("mystery", path: null, isEndTarget: false, identityUnknown: true);
+        var facts = Facts("mystery", path: null, identityUnknown: true);
 
-        BackgroundProtectionPolicy.DecideMarkable(facts).Eligible.Should().BeFalse();
-        BackgroundProtectionPolicy.DecideMarkable(facts).Reason
-            .Should().Be(KillBlockReason.MissingPath);
+        var verdict = BackgroundProtectionPolicy.Decide(facts);
+
+        verdict.Eligible.Should().BeFalse();
+        verdict.Reason.Should().Be(KillBlockReason.MissingPath);
+        BackgroundKillPlan.Resolve([facts]).Should().BeEmpty();
     }
 
     // ---------- 状态与去重 ----------
@@ -221,9 +195,9 @@ public class BackgroundProtectionTests
     {
         var facts = new[]
         {
-            Facts("chrome", isProtected: true, isEndTarget: false),
-            Facts("SomeService", isProtected: false, isEndTarget: true, systemEssential: true),
-            Facts("wallpaper64", isProtected: false, isEndTarget: true),
+            Facts("chrome", isProtected: true),
+            Facts("SomeService", systemEssential: true),
+            Facts("wallpaper64"),
         };
 
         // 系统关键进程不混进这里：它由 EssentialProcessGuard 用更准确的理由拦下

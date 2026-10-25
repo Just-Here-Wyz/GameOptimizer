@@ -182,11 +182,9 @@
 
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Content="全部保护" Command="{Binding ProtectAllBackgroundCommand}" Margin="0,0,6,0"
-                                    ToolTip="把当前列出的进程全部勾选为受保护；已保存的结束目标也一并转为保护（保护优先）"/>
-                            <Button Content="取消保护" Command="{Binding UnprotectAllBackgroundCommand}" Margin="0,0,6,0"
-                                    ToolTip="取消全部保护勾选；不会结束任何进程"/>
-                            <Button Content="清除结束目标" Command="{Binding ClearEndTargetsCommand}"
-                                    ToolTip="清空结束目标：游戏模式将不再结束任何进程"/>
+                                    ToolTip="把当前列出的进程全部勾选为受保护：本次一个都不会被结束"/>
+                            <Button Content="取消保护" Command="{Binding UnprotectAllBackgroundCommand}"
+                                    ToolTip="取消全部保护勾选。只改状态，不会结束任何进程；下次启动游戏模式时它们会被结束"/>
                         </StackPanel>
                     </Grid>
 
@@ -283,14 +281,15 @@
                                                   Style="{StaticResource ProtectCheckBox}"
                                                   IsChecked="{Binding IsProtected, Mode=TwoWay}"
                                                   VerticalAlignment="Center" Margin="0,0,12,0"
-                                                  ToolTip="勾选后，游戏模式绝不会结束这个进程"/>
+                                                  ToolTip="勾选后，游戏模式绝不会结束这个进程；不勾的默认会被结束"/>
 
-                                        <!-- 结束目标：只有通过安全机制的进程才能标记 -->
-                                        <Button Grid.Column="3" Content="{Binding MarkEndTargetText}"
-                                                Command="{Binding ToggleEndTargetCommand}"
-                                                IsEnabled="{Binding CanToggleEndTarget}"
-                                                ToolTip="{Binding MarkEndTargetHint}"
-                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <!-- 结果只读展示：未勾保护且通过安全检查 = 会结束 -->
+                                        <Border Grid.Column="3" BorderThickness="1" CornerRadius="4"
+                                                Padding="7,2" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                BorderBrush="{Binding KillBadgeHex}">
+                                            <TextBlock Text="{Binding KillBadgeText}" FontSize="10"
+                                                       Foreground="{Binding KillBadgeHex}"/>
+                                        </Border>
 
                                         <Button Grid.Column="4" Content="详情" Padding="10,5"
                                                 VerticalAlignment="Center"
@@ -375,7 +374,7 @@
                         </StackPanel>
                     </Grid>
 
-                    <TextBlock Text="勾选「保护」= 绝不结束；未勾选 ≠ 会被结束。只有标记为结束目标且通过安全检查的进程，才可能在启动游戏模式时被结束。"
+                    <TextBlock Text="勾选「保护」= 绝不结束；没勾的默认会被结束。系统关键进程、游戏本体、读不到路径的进程即使没勾也不会被结束，而且只有启动游戏模式时才会执行。"
                                Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>

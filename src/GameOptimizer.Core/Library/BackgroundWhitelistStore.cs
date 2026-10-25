@@ -1,27 +1,18 @@
 namespace GameOptimizer.Core.Library;
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 /// <summary>
 /// 白名单的持久化状态。
 ///
-/// <b>两个集合是两件不同的事，不要混为一谈：</b>
-/// <list type="bullet">
-/// <item><see cref="Protected"/>：用户勾选「保护」的进程 —— 游戏模式绝不结束它们；</item>
-/// <item><see cref="EndTargets"/>：用户<b>显式标记</b>为「结束目标」的进程 ——
-///       只有它们才有资格在游戏模式启动时被结束，且仍要通过安全检查。</item>
-/// </list>
-///
-/// 为什么结束目标要单独存一份：如果「没勾选保护」就等于「可以结束」，
-/// 那么默认状态下（一个都没勾）所有识别得出的后台程序都会被关掉——
-/// 这正是 v0.5.1 的事故（默认全选，用户一点就关掉了壁纸引擎）。
-/// 所以「不保护」只是<b>有资格</b>，真要结束必须再明确点一次。
+/// <b>只存一件事：哪些进程被勾选「保护」。</b>
+/// 其余进程默认就是「会被结束」，不需要也不应该再存一份名单——
+/// 存了反而会和界面上的实时扫描结果对不上（关掉的软件、新开的软件都不在旧名单里）。
 /// </summary>
-public sealed record BackgroundProtectionState(
-    IReadOnlyList<string> Protected,
-    IReadOnlyList<string> EndTargets)
+public sealed record BackgroundProtectionState(IReadOnlyList<string> Protected)
 {
-    public static BackgroundProtectionState Empty { get; } = new([], []);
+    public static BackgroundProtectionState Empty { get; } = new([]);
 }
 
 /// <summary>一次读取的结果，含迁移与失败说明。</summary>
@@ -40,36 +31,44 @@ public sealed record BackgroundProtectionLoadResult(
 }
 
 /// <summary>
-/// 用户自定义的后台进程保护 / 结束目标名单，持久化到本地 JSON。
+/// 用户自定义的后台进程保护名单，持久化到本地 JSON。
 ///
-/// <b>文件格式（v2）</b>：
+/// <b>文件格式（v3）</b>：
 /// <code>
 /// {
-///   "schemaVersion": 2,
-///   "protected":  ["WeChat"],        // 勾选了保护：绝不结束
-///   "endTargets": ["wallpaper64"]    // 显式标记为结束目标：只有它们才会被结束
+///   "schemaVersion": 3,
+///   "protected": ["WeChat"]   // 勾选了保护：绝不结束。其余进程默认会被结束
 /// }
 /// </code>
 ///
-/// <b>旧版格式（v1）</b>：<code>{ "processes": ["wallpaper64"] }</code>——
-/// 那时「勾选」的含义是「要结束」，与本版正好相反。
+/// <b>旧版格式</b>：
+/// <list type="bullet">
+/// <item>v1 <c>{ "processes": ["wallpaper64"] }</c> —— 那时勾选的含义是「要结束」；</item>
+/// <item>v2 <c>{ "protected": [...], "endTargets": [...] }</c> —— 需要显式标记结束目标。</item>
+/// </list>
 ///
-/// <b>迁移策略（不允许反转语义）</b>：旧版 <c>processes</c> 里的项
-/// <b>按原语义迁到 <see cref="BackgroundProtectionState.EndTargets"/></b>，
-/// 保护名单留空，并给出一条提示让用户核对。把旧勾选直接倒成「受保护」等于
-/// 悄悄改掉用户当初的决定——他会以为游戏模式还在关那些程序，实际一个都没关。
+/// <b>迁移策略</b>：只保留 <c>protected</c>，两份旧名单都<b>丢弃</b>并给出提示。
+/// 理由：新语义下「除保护项外都会结束」，旧的两份名单无论怎么映射都不会改变最终行为，
+/// 硬留着只会让人以为它们还在起作用。唯一真正影响行为的只有保护名单，那份一定保留。
+/// 特别注意<b>绝不把旧的 endTargets / processes 倒成保护</b>——
+/// 那会让用户以为「游戏模式还在关那些程序」，实际一个都没关。
 ///
-/// <b>无法判断时的保守策略</b>：结构认不出来就当作空配置（一项都不结束），
-/// 同时给出提示；绝不因为「读不懂」而退回任何默认名单。
+/// <b>无法判断时的保守策略</b>：结构认不出来就当作空配置（保护为空 = 默认结束所有候选），
+/// 同时给出提示，让用户有机会先去勾保护再启动游戏模式。
 /// </summary>
 public sealed class BackgroundWhitelistStore
 {
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
+
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+
+        // 不写 null 字段：v3 只该出现 schemaVersion 与 protected，
+        // 留着 "endTargets": null 会让用户以为这个字段还在起作用
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     /// <summary>默认路径：%LocalAppData%\GameOptimizer\background-whitelist.json</summary>
@@ -86,8 +85,9 @@ public sealed class BackgroundWhitelistStore
     public string FilePath => _path;
 
     /// <summary>
-    /// 读取保护名单与结束目标。
-    /// 文件不存在返回空状态（不是默认名单）；损坏/无权限时返回空状态 + <see cref="BackgroundProtectionLoadResult.Error"/>。
+    /// 读取保护名单。
+    /// 文件不存在返回空状态（<b>不是默认保护名单</b>，即默认所有候选都会被结束）；
+    /// 损坏/无权限时返回空状态 + <see cref="BackgroundProtectionLoadResult.Error"/>。
     /// </summary>
     public BackgroundProtectionLoadResult LoadState()
     {
@@ -111,54 +111,58 @@ public sealed class BackgroundWhitelistStore
             {
                 return new BackgroundProtectionLoadResult(
                     BackgroundProtectionState.Empty, false,
-                    "白名单配置内容为空，已按空配置处理（不会结束任何进程）。", null);
+                    "白名单配置内容为空，已按空保护名单处理（未勾选保护的进程都会被结束）。", null);
             }
 
-            var legacy = saved.Processes is not null;
-            var modern = saved.Protected is not null || saved.EndTargets is not null;
+            var v1 = saved.Processes is not null;
+            var v2 = saved.EndTargets is not null;
+            var modern = saved.Protected is not null;
 
-            // 结构完全认不出来：保守处理，一项都不结束
-            if (!legacy && !modern)
+            if (!v1 && !v2 && !modern)
             {
                 return new BackgroundProtectionLoadResult(
                     BackgroundProtectionState.Empty, false,
-                    "白名单配置结构无法识别，已按空配置处理（不会结束任何进程），请重新设置后保存。", null);
+                    "白名单配置结构无法识别，已按空保护名单处理（未勾选保护的进程都会被结束），请重新设置保护项后保存。", null);
             }
 
             var protectedNames = Normalize(saved.Protected ?? []);
-            var endTargets = Normalize(saved.EndTargets ?? []);
+            var state = new BackgroundProtectionState(protectedNames);
 
-            if (legacy)
+            if (v1)
             {
-                // 旧版勾选 = 要结束 → 原语义迁入结束目标，绝不倒成「受保护」
-                var migrated = Normalize(saved.Processes ?? []);
-                foreach (var name in migrated)
-                {
-                    if (!endTargets.Contains(name, StringComparer.OrdinalIgnoreCase))
-                        endTargets.Add(name);
-                }
+                // 旧版勾选 = 要结束。新语义下「没勾保护就会结束」，旧名单已经不起作用，
+                // 但它恰恰说明这些进程**原本就在结束范围**里——与默认行为一致，所以丢弃是安全的。
+                var dropped = Normalize(saved.Processes ?? []);
+                var notice = dropped.Count == 0
+                    ? "检测到旧版白名单配置（其中没有可用项），已按新规则处理。"
+                    : $"检测到旧版白名单配置：旧清单里的 {dropped.Count} 项在新规则下本来就属于结束范围" +
+                      "（现在除勾选保护的程序外都会结束），因此清单已丢弃，保护名单不变。请核对保护项后再启动游戏模式。";
 
-                var notice = migrated.Count == 0
-                    ? "检测到旧版白名单配置（其中没有可用项），已迁移为空配置。"
-                    : $"检测到旧版白名单配置：{migrated.Count} 项按原语义保留为「结束目标」" +
-                      "（旧版勾选的含义是会被结束），没有自动转成保护。请核对后再保存。";
-
-                return new BackgroundProtectionLoadResult(
-                    new BackgroundProtectionState(protectedNames, endTargets), true, notice, null);
+                return new BackgroundProtectionLoadResult(state, true, notice, null);
             }
 
-            return new BackgroundProtectionLoadResult(
-                new BackgroundProtectionState(protectedNames, endTargets), false, null, null);
+            if (v2)
+            {
+                var dropped = Normalize(saved.EndTargets ?? []);
+                var notice = dropped.Count == 0
+                    ? "检测到旧版「结束目标」配置，已按新规则处理。"
+                    : $"旧版的 {dropped.Count} 项「结束目标」已并入默认行为：现在未勾选保护的程序都会被结束，" +
+                      "这份清单不再需要，已丢弃。保护名单保持不变。";
+
+                return new BackgroundProtectionLoadResult(state, true, notice, null);
+            }
+
+            return new BackgroundProtectionLoadResult(state, false, null, null);
         }
         catch (Exception ex)
         {
             return new BackgroundProtectionLoadResult(
                 BackgroundProtectionState.Empty, false, null,
-                $"白名单配置无法解析（不会结束任何进程）：{ex.Message}");
+                $"白名单配置无法解析（按空保护名单处理）：{ex.Message}");
         }
     }
 
-    /// <summary>保存保护名单与结束目标。返回是否成功，失败原因交给调用方显示。</summary>
+    /// <summary>保存保护名单。返回是否成功，失败原因交给调用方显示。</summary>
     public bool SaveState(BackgroundProtectionState state, out string? error)
     {
         error = null;
@@ -171,7 +175,6 @@ public sealed class BackgroundWhitelistStore
             {
                 SchemaVersion = CurrentSchemaVersion,
                 Protected = Normalize(state.Protected),
-                EndTargets = Normalize(state.EndTargets),
             };
 
             File.WriteAllText(_path, JsonSerializer.Serialize(payload, JsonOptions));
@@ -217,13 +220,13 @@ public sealed class BackgroundWhitelistStore
         /// <summary>v2 起写入；v1 文件里没有这个字段（读出来是 0）。</summary>
         public int SchemaVersion { get; set; }
 
-        /// <summary>v2：勾选保护的进程名。</summary>
+        /// <summary>v2 起：勾选保护的进程名。v3 只写这一个字段。</summary>
         public List<string>? Protected { get; set; }
 
-        /// <summary>v2：显式标记为结束目标的进程名。</summary>
+        /// <summary>v2：显式标记为结束目标的进程名。仅用于识别旧格式，不再写入。</summary>
         public List<string>? EndTargets { get; set; }
 
-        /// <summary>v1：勾选即「会结束」。仅用于迁移，不再写入。</summary>
+        /// <summary>v1：勾选即「会结束」。仅用于识别旧格式，不再写入。</summary>
         public List<string>? Processes { get; set; }
     }
 }

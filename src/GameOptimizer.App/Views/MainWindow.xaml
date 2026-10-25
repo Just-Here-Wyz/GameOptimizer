@@ -311,19 +311,36 @@
                                                             Padding="14,10" Margin="0,0,0,6">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto"/>
                                                                 <ColumnDefinition Width="*"/>
                                                                 <ColumnDefinition Width="92"/>
                                                                 <ColumnDefinition Width="96"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <StackPanel Grid.Column="0">
+
+                                                            <!-- 游戏图标；扫描不到 exe 时退化为首字符色块 -->
+                                                            <Border Grid.Column="0" Width="34" Height="34"
+                                                                    CornerRadius="8" Background="#FF25272E"
+                                                                    VerticalAlignment="Center" Margin="0,0,10,0">
+                                                                <Grid>
+                                                                    <Image Source="{Binding Icon}" Width="26" Height="26"
+                                                                           RenderOptions.BitmapScalingMode="HighQuality"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    <TextBlock Text="{Binding IconFallbackText}" FontSize="13"
+                                                                               Foreground="#FF83868D"
+                                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                               Visibility="{Binding Icon, Converter={StaticResource NullToCollapsedInverse}}"/>
+                                                                </Grid>
+                                                            </Border>
+
+                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding Name}" FontSize="13"/>
                                                                 <TextBlock Text="{Binding Path}" Style="{StaticResource Faint}"
                                                                            TextTrimming="CharacterEllipsis"/>
                                                             </StackPanel>
-                                                            <TextBlock Grid.Column="1" Text="{Binding SizeText}"
+                                                            <TextBlock Grid.Column="2" Text="{Binding SizeText}"
                                                                        VerticalAlignment="Center"
                                                                        Style="{StaticResource Muted}"/>
-                                                            <TextBlock Grid.Column="2" Text="{Binding VerdictText}"
+                                                            <TextBlock Grid.Column="3" Text="{Binding VerdictText}"
                                                                        Foreground="{Binding VerdictColor}"
                                                                        FontWeight="SemiBold" VerticalAlignment="Center"
                                                                        ToolTip="{Binding DemandText}"/>

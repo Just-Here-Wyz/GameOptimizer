@@ -102,7 +102,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SaveBackgroundListCommand = new RelayCommand(_ => SaveBackgroundList());
         ProtectAllBackgroundCommand = new RelayCommand(_ => SetAllProtected(true));
         UnprotectAllBackgroundCommand = new RelayCommand(_ => SetAllProtected(false));
-        ClearEndTargetsCommand = new RelayCommand(_ => ClearEndTargets());
 
         ScanPeripheralsCommand = new RelayCommand(_ => RefreshPeripherals());
         OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
@@ -186,11 +185,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>把当前列出的进程全部勾选为受保护。</summary>
     public RelayCommand ProtectAllBackgroundCommand { get; }
 
-    /// <summary>取消全部保护勾选。<b>只改保护状态，不会结束任何进程。</b></summary>
+    /// <summary>取消全部保护勾选。<b>只改保护状态，不会结束任何进程</b>；下次启动游戏模式时它们会被结束。</summary>
     public RelayCommand UnprotectAllBackgroundCommand { get; }
-
-    /// <summary>清空结束目标（游戏模式将不再结束任何进程）。</summary>
-    public RelayCommand ClearEndTargetsCommand { get; }
 
     public RelayCommand ScanPeripheralsCommand { get; }
 
@@ -768,16 +764,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>配置文件真实路径，界面显示出来方便用户手改。</summary>
     public string BackgroundConfigPath => _whitelistStore.FilePath;
 
-    /// <summary>列表顶部的计数：总数 / 受保护 / 未保护 / 无法识别。</summary>
+    /// <summary>列表顶部的计数：总数 / 受保护 / 会被结束 / 无法识别。</summary>
     public string BackgroundCountText
     {
         get
         {
             var total = BackgroundProcesses.Count;
             var protectedCount = BackgroundProcesses.Count(e => e.IsProtected);
-            var unprotected = total - protectedCount;
+            var killable = BackgroundProcesses.Count(e => e.Verdict.Eligible);
+            var blocked = total - protectedCount - killable;
             var unknown = BackgroundProcesses.Count(e => e.IsIdentityUnknown);
-            return $"共 {total} 项 · 受保护 {protectedCount} · 未保护 {unprotected} · 无法识别 {unknown}";
+
+            var text = $"共 {total} 项 · 受保护 {protectedCount} · 会被结束 {killable}";
+            if (blocked > 0) text += $" · 安全检查拦下 {blocked}";
+            return text + $" · 无法识别 {unknown}";
         }
     }
 
@@ -787,22 +787,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
         get
         {
             var protectedCount = _protectedNames.Count;
-            var savedTargets = _endTargets.Count;
-            if (protectedCount == 0 && savedTargets == 0) return "还没有设置保护项，也没有结束目标";
-
             var text = $"受保护 {protectedCount} 项";
-            if (savedTargets == 0) return text + " · 不会结束任何程序";
 
-            // 结束目标是「保存的意图」，可能包含当前没运行的程序；两者不一致时要说清楚，
-            // 否则用户会以为「2 项结束目标」这次都会被执行。
-            var running = CurrentEndTargets().Count;
-            return running == savedTargets
-                ? text + $" · 结束目标 {savedTargets} 项"
-                : text + $" · 结束目标 {savedTargets} 项（当前运行 {running} 项）";
+            // 没打开过浮窗时列表还没扫描，此时说「会结束 0 项」是误导，直接说明未统计
+            if (BackgroundProcesses.Count == 0) return text + " · 打开「管理后台进程」可查看将结束的项目";
+
+            var killable = CurrentEndTargets().Count;
+            return killable == 0
+                ? text + " · 不会被结束的进程"
+                : text + $" · 启动游戏模式时将结束 {killable} 项";
         }
     }
 
-    /// <summary>浮窗底部：这次保存后，游戏模式到底会做什么（按「此刻正在运行」算）。</summary>
+    /// <summary>浮窗底部：此刻启动游戏模式，到底会结束哪些（按「此刻正在运行」算）。</summary>
     public string BackgroundKillPreviewText
     {
         get
@@ -810,15 +807,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var targets = CurrentEndTargets();
             if (targets.Count == 0)
             {
-                // 保存了目标但一个都没在跑：必须说清是「没运行」而不是「没设置」
-                return _endTargets.Count == 0
-                    ? "启动游戏模式时不会结束任何进程"
-                    : $"已保存 {_endTargets.Count} 个结束目标，但它们当前都没有运行，本次不会结束进程";
+                return BackgroundProcesses.Count == 0
+                    ? "当前没有可管理的进程"
+                    : "没有进程会被结束（都已勾选保护，或被安全检查拦下）";
             }
 
             var preview = string.Join("、", targets.Take(5));
             if (targets.Count > 5) preview += $" 等 {targets.Count} 项";
-            return $"启动游戏模式时将结束（通过安全检查后）：{preview}";
+            return $"启动游戏模式时将结束 {targets.Count} 项：{preview}";
         }
     }
 
@@ -865,13 +861,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool HasBackgroundNotice => _backgroundNoticeText.Length > 0;
 
     /// <summary>
-    /// 受保护进程名（跨次运行保留）。与界面列表分开存：
+    /// 受保护进程名（跨次运行保留）。这是<b>唯一</b>持久化的用户输入：
     /// 列表只显示「此刻正在运行」的进程，而保护意图必须记住没运行的那些。
+    /// 其余进程默认都是结束目标，不需要存。
     /// </summary>
     private readonly HashSet<string> _protectedNames = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>用户显式标记的结束目标。默认空 = 谁都不关（破坏性操作默认关闭）。</summary>
-    private readonly HashSet<string> _endTargets = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>批量改状态时压住逐条保存，最后只写一次盘。</summary>
     private bool _suppressBackgroundSave;
@@ -899,11 +893,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var load = _whitelistStore.LoadState();
 
         // 读取失败也不能让整个列表空着不给看：进程信息照样展示，
-        // 只是状态行说明「配置没读出来，本次不会结束任何进程」。
+        // 只是提示里说明「配置没读出来」——此时保护名单为空，等于所有候选都会被结束，
+        // 所以必须把这件事写在红字里，而不是让用户以为「没设置 = 什么都不关」。
         _protectedNames.Clear();
-        _endTargets.Clear();
         foreach (var name in load.State.Protected) _protectedNames.Add(name);
-        foreach (var name in load.State.EndTargets) _endTargets.Add(name);
 
         foreach (var e in BackgroundProcesses) e.PropertyChanged -= OnBackgroundEntryChanged;
         BackgroundProcesses.Clear();
@@ -938,21 +931,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         foreach (var info in entries)
         {
-            var entry = new BackgroundProcessEntry(info)
-            {
-                IsEndTarget = _endTargets.Contains(info.ProcessName) && !info.IsSystemEssential,
-            };
-
-            // 以磁盘为准重建结束目标：被保护的项、系统关键项一律不留在目标里
-            if (entry.IsEndTarget && entry.CanMarkEndTarget) _endTargets.Add(entry.ProcessName);
-            else _endTargets.Remove(entry.ProcessName);
-
+            // 结束与否由 Core 判据即时算出（未保护即默认结束），不再需要从磁盘恢复标记
+            var entry = new BackgroundProcessEntry(info);
             entry.PropertyChanged += OnBackgroundEntryChanged;
             BackgroundProcesses.Add(entry);
         }
 
         BackgroundNoticeText = load.Error is not null
-            ? $"读取配置失败：{load.Error}（本次不会结束任何进程）"
+            ? $"读取配置失败：{load.Error}（保护名单为空，所有候选都会被结束，请先核对保护项）"
             : load.Notice ?? "";
 
         HasBackgroundStatusError = load.Error is not null;
@@ -960,7 +946,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         BackgroundStatusText = BackgroundProcesses.Count == 0
             ? "当前没有可管理的后台进程"
             : load.Error is not null
-                ? $"已加载 {BackgroundProcesses.Count} 项，但配置读取失败，结束目标按空处理"
+                ? $"已加载 {BackgroundProcesses.Count} 项，但配置读取失败，保护名单按空处理"
                 : $"当前运行 {BackgroundProcesses.Count} 项" +
                   (autoDetected > 0 ? $"（其中 {autoDetected} 项为内置名单外的自动检测项）" : "");
 
@@ -1002,9 +988,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (entry.IsProtected) _protectedNames.Add(entry.ProcessName);
         else _protectedNames.Remove(entry.ProcessName);
 
-        if (entry.IsEndTarget && !entry.IsSystemCritical) _endTargets.Add(entry.ProcessName);
-        else _endTargets.Remove(entry.ProcessName);
-
         NotifyBackgroundChanged();
 
         // 即时持久化：改一次就存一次，用户不必记得点保存。
@@ -1012,17 +995,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (!_suppressBackgroundSave) SaveBackgroundList();
     }
 
-    /// <summary>保存保护名单与结束目标。失败必须写进状态行。</summary>
+    /// <summary>保存保护名单。失败必须写进状态行。</summary>
     private void SaveBackgroundList()
     {
         var state = new BackgroundProtectionState(
-            _protectedNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
-            _endTargets.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList());
+            _protectedNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList());
 
         if (_whitelistStore.SaveState(state, out var error))
         {
             HasBackgroundStatusError = false;
-            BackgroundStatusText = $"已保存：受保护 {state.Protected.Count} 项 · 结束目标 {state.EndTargets.Count} 项";
+            BackgroundStatusText = state.Protected.Count == 0
+                ? "已保存：没有保护项，启动游戏模式时将结束所有通过安全检查的候选"
+                : $"已保存：受保护 {state.Protected.Count} 项 · 其余候选都会被结束";
             BackgroundNoticeText = "";
         }
         else
@@ -1034,7 +1018,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         NotifyBackgroundChanged();
     }
 
-    /// <summary>勾选 / 取消全选保护。<b>不会结束任何进程</b>，只改状态。</summary>
+    /// <summary>全部勾选 / 全部取消保护。<b>不会结束任何进程</b>，只改状态。</summary>
     private void SetAllProtected(bool protect)
     {
         _suppressBackgroundSave = true;
@@ -1043,42 +1027,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             foreach (var entry in BackgroundProcesses.ToList())
             {
                 if (entry.IsSystemCritical) continue;
-
-                // 勾选保护会自动撤销结束目标（保护优先），撤销保护不会自动变成结束目标
                 entry.IsProtected = protect;
             }
-
-            // 「全部保护」的意图是「本次一个都别关」。结束目标里可能有当前没运行的进程，
-            // 它们不在列表里、刚才那轮循环碰不到 —— 这里一并转成保护并清空，
-            // 否则会出现「我点了全部保护，下次它跑起来还是被关了」。
-            if (protect)
-            {
-                foreach (var name in _endTargets.ToList()) _protectedNames.Add(name);
-                _endTargets.Clear();
-            }
         }
         finally
         {
             _suppressBackgroundSave = false;
         }
 
-        SaveBackgroundList();
-    }
-
-    /// <summary>清空结束目标：游戏模式将不再结束任何进程。</summary>
-    private void ClearEndTargets()
-    {
-        _suppressBackgroundSave = true;
-        try
-        {
-            foreach (var entry in BackgroundProcesses.ToList()) entry.IsEndTarget = false;
-        }
-        finally
-        {
-            _suppressBackgroundSave = false;
-        }
-
-        _endTargets.Clear();
         SaveBackgroundList();
     }
 
@@ -1088,19 +1044,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(BackgroundSummaryText));
         OnPropertyChanged(nameof(BackgroundKillPreviewText));
         BackgroundProcessesView?.Refresh();
-        ClearEndTargetsCommand?.RaiseCanExecuteChanged();
     }
 
-    /// <summary>把当前结束目标同步到游戏模式的结束进程动作上。</summary>
+    /// <summary>
+    /// 把当前结束名单同步到游戏模式的结束进程动作上。
+    /// 名单来自 <see cref="BackgroundKillPlan.Resolve"/>：未勾保护 + 通过全部安全检查的进程。
+    /// </summary>
     private void ApplyWhitelistToGameMode()
     {
         var facts = BackgroundProcesses.Select(e => e.ToFacts(_gameStems)).ToList();
         var targets = BackgroundKillPlan.Resolve(facts);
         var protectedNames = BackgroundKillPlan.ProtectedNames(facts);
 
-        // 名单为空 = 用户不想结束任何进程，此时绝不偷偷套默认名单，
-        // 否则会出现「我明明全取消了，它还是关了我的软件」。
-        // 受保护名单一并交给动作层，作为执行侧的最后一道防线。
+        // 受保护名单一并交给动作层，作为执行侧的最后一道防线：
+        // 即使目标名单被外部改动，这些名字也不会被结束。
         _gameMode.Replace<EndProcessAction>(new EndProcessAction(targets, protectedNames));
     }
 
@@ -1882,6 +1839,12 @@ public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessmen
     public string SizeText => $"{entry.SizeOnDiskGb:F1} GB";
     public string Path => entry.InstallPath;
 
+    /// <summary>游戏 exe 的图标；扫描不到 exe 路径时为 null，界面退化为首字符色块。</summary>
+    public System.Windows.Media.ImageSource? Icon => AppIconCache.ForPath(entry.ExecutablePath);
+
+    /// <summary>首字符兜底：游戏名第一个字符。</summary>
+    public string IconFallbackText => (entry.Name.Length > 0 ? entry.Name[0] : '?').ToString();
+
     /// <summary>这款游戏正常配置下需要的显存与当前剩余。</summary>
     public string DemandText => _assessment.Verdict == GameVramVerdict.Unknown
         ? $"{_assessment.Requirement.SettingsText} 约需 {_assessment.Requirement.RequiredMb:F0} MB"
@@ -1934,15 +1897,15 @@ public sealed record BackgroundFilterOption(BackgroundListFilter Value, string T
 /// <summary>
 /// 后台进程管理里的一行。
 ///
-/// <b>语义（v2.4，全项目唯一）</b>：
+/// <b>语义（v2.4 第二次调整，全项目唯一）</b>：
 /// <list type="bullet">
 /// <item><see cref="IsProtected"/> 勾选 = <b>保护</b>，游戏模式绝不结束它；</item>
-/// <item><see cref="IsEndTarget"/> 是另一件事：用户显式标记「可以结束」，
-///       而且只有通过安全检查的进程才允许标记；</item>
-/// <item>两者互斥：勾上保护会自动撤销结束标记。</item>
+/// <item>没勾选的<b>默认就是结束目标</b>——用户只需挑出「不能动的那几个」；</item>
+/// <item>是否真的会被结束仍以 <see cref="BackgroundProtectionPolicy.Decide"/> 为准：
+///       系统关键、游戏本体、读不到路径的即使没勾保护也不会被结束。</item>
 /// </list>
 /// 判断依据全部来自 <see cref="BackgroundProtectionPolicy"/>，界面只负责显示，
-/// 避免「界面说受保护、执行时仍然被结束」。
+/// 避免「界面说会结束、执行时却没结束」或反过来。
 /// </summary>
 public sealed class BackgroundProcessEntry : INotifyPropertyChanged
 {
@@ -1958,8 +1921,6 @@ public sealed class BackgroundProcessEntry : INotifyPropertyChanged
         // 只靠 info.State 展示会让复选框显示为未勾选，而状态徽章又写着「受保护」，
         // 更糟的是用户再点一下就把保护取消了（界面与存储不一致）。
         _isProtected = info.State == ProtectionState.Protected;
-
-        ToggleEndTargetCommand = new RelayCommand(_ => ToggleEndTarget(), _ => CanToggleEndTarget);
     }
 
     public string ProcessName => _info.ProcessName;
@@ -2001,14 +1962,17 @@ public sealed class BackgroundProcessEntry : INotifyPropertyChanged
     /// <summary>系统关键进程的冻结理由；普通进程为空。</summary>
     public string ProtectionReasonText => _info.SystemReason ?? "";
 
-    /// <summary>详情区一行「为什么这样判定」。</summary>
-    public string DecisionText => _info.IsSystemEssential
-        ? $"系统关键进程（{_info.SystemReason}）：即使不勾选保护也不会被结束"
-        : IsProtected
-            ? "已勾选保护：游戏模式不会结束它"
-            : IsEndTarget
-                ? "结束目标：启动游戏模式时，通过安全检查后会被结束"
-                : "未保护也未标记结束：游戏模式不会结束它";
+    /// <summary>本行最终的判定结果：会结束 / 不结束，以及原因。界面显示与执行侧共用同一套判据。</summary>
+    public KillVerdict Verdict => BackgroundProtectionPolicy.Decide(Facts);
+
+    /// <summary>卡片右侧的结果标签：明确告诉用户「这个会不会被关」。</summary>
+    public string KillBadgeText => Verdict.Eligible ? "会结束" : "不会结束";
+
+    /// <summary>会结束用琥珀色（需要留意），不会结束用灰色。</summary>
+    public string KillBadgeHex => Verdict.Eligible ? "#FFFF9F0A" : "#FF5C5F66";
+
+    /// <summary>详情区一行「为什么这样判定」。直接取 Core 的解释文案，保证两处口径一致。</summary>
+    public string DecisionText => Verdict.Explanation;
 
     /// <summary>搜索用的合并文本（应用名 / 进程名 / 路径 / 用途 / 发布者）。</summary>
     public string SearchText => BackgroundProcessFilter.SearchTextOf(_info);
@@ -2035,7 +1999,7 @@ public sealed class BackgroundProcessEntry : INotifyPropertyChanged
     }
 
     private bool _isProtected;
-    /// <summary>勾选 = 保护。勾上会撤销结束目标（保护优先）。</summary>
+    /// <summary>勾选 = 保护。唯一的用户输入；取消勾选立即回到「默认会被结束」。</summary>
     public bool IsProtected
     {
         get => _isProtected;
@@ -2043,51 +2007,15 @@ public sealed class BackgroundProcessEntry : INotifyPropertyChanged
         {
             if (_isProtected == value) return;
             _isProtected = value;
-
-            // 保护优先：勾上保护就不再是结束目标
-            if (value && _isEndTarget) SetEndTarget(false);
-
             RaiseStateChanged();
         }
     }
 
-    private bool _isEndTarget;
-    /// <summary>是否被显式标记为结束目标。取消勾选保护不会自动置为 true。</summary>
-    public bool IsEndTarget
-    {
-        get => _isEndTarget;
-        set
-        {
-            if (_isEndTarget == value) return;
-
-            // 不允许把受保护 / 系统关键 / 读不到路径的进程标成结束目标
-            if (value && !BackgroundProtectionPolicy.DecideMarkable(Facts).Eligible) return;
-
-            SetEndTarget(value);
-        }
-    }
-
-    /// <summary>能否标记结束：受保护、系统关键、读不到路径、游戏进程都不行。</summary>
-    public bool CanMarkEndTarget => BackgroundProtectionPolicy.DecideMarkable(Facts).Eligible;
-
-    /// <summary>按钮可用性：能标记时可用；已经标记过时也允许取消。</summary>
-    public bool CanToggleEndTarget => _isEndTarget || CanMarkEndTarget;
-
-    public string MarkEndTargetText => _isEndTarget ? "取消结束标记" : "标记为结束目标";
-
-    /// <summary>不能标记时的原因，作为按钮提示显示。</summary>
-    public string MarkEndTargetHint
-    {
-        get
-        {
-            var verdict = BackgroundProtectionPolicy.DecideMarkable(Facts);
-            return verdict.Eligible
-                ? "标记后，只有你启动游戏模式时才会结束它"
-                : verdict.Explanation;
-        }
-    }
-
-    public RelayCommand ToggleEndTargetCommand { get; }
+    /// <summary>
+    /// 是否在结束名单里（派生值，不再单独存储）。
+    /// 没勾保护、且通过系统关键 / 游戏 / 路径检查的，就是结束目标。
+    /// </summary>
+    public bool IsEndTarget => Verdict.Eligible;
 
     /// <summary>本行的客观事实，供 Core 判据使用。</summary>
     public BackgroundTargetFacts ToFacts(IReadOnlySet<string>? gameStems)
@@ -2095,41 +2023,25 @@ public sealed class BackgroundProcessEntry : INotifyPropertyChanged
             ProcessName,
             ExecutablePath,
             IsProtected,
-            IsEndTarget,
             IsSystemCritical,
             IsIdentityUnknown,
             _matchesGame || BackgroundCandidateScan.MatchesGame(ProcessName, gameStems));
 
     /// <summary>当前行的判定结果（界面显示与执行侧共用同一套判据）。</summary>
     public BackgroundTargetFacts Facts
-        => new(ProcessName, ExecutablePath, IsProtected, IsEndTarget, IsSystemCritical, IsIdentityUnknown, _matchesGame);
-
-    private void ToggleEndTarget()
-    {
-        if (_isEndTarget) SetEndTarget(false);
-        else if (CanMarkEndTarget) SetEndTarget(true);
-    }
-
-    private void SetEndTarget(bool value)
-    {
-        if (_isEndTarget == value) return;
-        _isEndTarget = value;
-        RaiseStateChanged();
-    }
+        => new(ProcessName, ExecutablePath, IsProtected, IsSystemCritical, IsIdentityUnknown, _matchesGame);
 
     private void RaiseStateChanged()
     {
         PropertyChanged?.Invoke(this, new(nameof(IsProtected)));
         PropertyChanged?.Invoke(this, new(nameof(IsEndTarget)));
+        PropertyChanged?.Invoke(this, new(nameof(Verdict)));
+        PropertyChanged?.Invoke(this, new(nameof(KillBadgeText)));
+        PropertyChanged?.Invoke(this, new(nameof(KillBadgeHex)));
         PropertyChanged?.Invoke(this, new(nameof(State)));
         PropertyChanged?.Invoke(this, new(nameof(StateText)));
         PropertyChanged?.Invoke(this, new(nameof(StateHex)));
         PropertyChanged?.Invoke(this, new(nameof(DecisionText)));
-        PropertyChanged?.Invoke(this, new(nameof(CanMarkEndTarget)));
-        PropertyChanged?.Invoke(this, new(nameof(CanToggleEndTarget)));
-        PropertyChanged?.Invoke(this, new(nameof(MarkEndTargetText)));
-        PropertyChanged?.Invoke(this, new(nameof(MarkEndTargetHint)));
-        ToggleEndTargetCommand.RaiseCanExecuteChanged();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

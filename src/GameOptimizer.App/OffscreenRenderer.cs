@@ -97,15 +97,12 @@ internal static class OffscreenRenderer
         Trace("bg vm created");
 
         // 展开第一行的详情，让「完整路径 / 识别依据」这块也进截图；
-        // 并模拟「一行受保护 + 一行结束目标」，把两种态都拍进去
+        // 并模拟「一行受保护」，把两种结果（会结束 / 不会结束）都拍进去
         if (window.DataContext is GameOptimizer.App.ViewModels.MainViewModel vm)
         {
             var rows = vm.BackgroundProcesses;
             if (rows.Count > 0) rows[0].IsExpanded = true;
             if (rows.Count > 0) rows[0].IsProtected = true;
-
-            var target = rows.FirstOrDefault(r => r.CanMarkEndTarget && !r.IsProtected);
-            if (target is not null) target.IsEndTarget = true;
         }
 
         var content = (UIElement)window.Content;

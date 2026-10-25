@@ -4,15 +4,15 @@ using FluentAssertions;
 using GameOptimizer.Core.Library;
 
 /// <summary>
-/// 保护 / 结束目标名单的持久化与迁移用例。
+/// 保护名单的持久化与迁移用例。
 ///
-/// 需求来源：默认名单覆盖不到用户机器上真正抢资源的软件
-/// （实测是壁纸引擎、厂商管家、任务栏美化），必须让用户自己能改。
-/// 但保护名单是硬约束——写进配置文件也不接受。
+/// v2.4 第三次语义调整后，磁盘上<b>只存保护名单</b>：
+/// 未勾选保护的进程默认就是结束目标，不需要再存一份「要关谁」的清单
+/// （存了也会和实时扫描结果对不上）。
 ///
-/// v2.4 起「勾选」的语义从「要结束」翻转为「受保护」，
-/// 因此旧文件的迁移必须<b>保留原语义</b>：旧的勾选项迁到结束目标，
-/// 绝不能倒成受保护，否则用户会以为游戏模式还在关那些程序。
+/// 迁移的关键约束：旧格式里的 <c>processes</c>（v1 勾选=结束）与
+/// <c>endTargets</c>（v2 显式标记）都<b>不会被倒成保护</b>——
+/// 那会让用户以为「游戏模式还在关那些程序」，实际一个都没关。
 /// </summary>
 public class BackgroundWhitelistStoreTests : IDisposable
 {
@@ -33,95 +33,79 @@ public class BackgroundWhitelistStoreTests : IDisposable
     }
 
     [Fact]
-    public void 文件不存在时应返回空名单而不是默认全选()
+    public void 文件不存在时应返回空保护名单而不是默认全选()
     {
-        // 勾选意味着「受保护」/「会被结束」，两种都是用户的决定。
-        // 不能替他决定——曾因默认全选，用户一点开启就关掉了他正在用的软件。
+        // 保护名单为空 = 默认所有候选都会被结束。这个默认值必须由「什么都没配」推出，
+        // 而不是由某个内置名单推出——否则用户机器上装了什么都不受控。
         var load = Store.LoadState();
 
         load.State.Protected.Should().BeEmpty();
-        load.State.EndTargets.Should().BeEmpty();
         load.Error.Should().BeNull();
         load.MigratedFromLegacy.Should().BeFalse();
     }
 
     [Fact]
-    public void 保存后应能原样读回保护与结束目标()
+    public void 保存后应能原样读回保护名单()
     {
         var store = Store;
-        store.SaveState(new BackgroundProtectionState(
-            ["WeChat", "chrome"],
-            ["wallpaper64", "telemetry_agent"]), out var error).Should().BeTrue();
+        store.SaveState(new BackgroundProtectionState(["WeChat", "chrome"]), out var error)
+            .Should().BeTrue();
         error.Should().BeNull();
 
         var load = store.LoadState();
         load.State.Protected.Should().BeEquivalentTo(["WeChat", "chrome"]);
-        load.State.EndTargets.Should().BeEquivalentTo(["wallpaper64", "telemetry_agent"]);
         load.Error.Should().BeNull();
     }
 
     [Fact]
-    public void 保存时应剔除保护名单内的进程()
+    public void 保存时应剔除保护名单内的系统进程()
     {
-        // 用户手改配置写进 explorer，也不能让它生效
+        // 用户手改配置写进 explorer，也不能让它生效：那是系统外壳，动不得
         var store = Store;
-        store.SaveState(new BackgroundProtectionState(["explorer"], ["wallpaper64", "MsMpEng"]), out _)
+        store.SaveState(new BackgroundProtectionState(["explorer", "MsMpEng", "chrome"]), out _)
             .Should().BeTrue();
 
-        var load = store.LoadState();
-        load.State.Protected.Should().BeEmpty();
-        load.State.EndTargets.Should().BeEquivalentTo(["wallpaper64"]);
+        store.LoadState().State.Protected.Should().BeEquivalentTo(["chrome"]);
     }
 
     [Fact]
     public void 应去掉重复项与空项()
     {
         var store = Store;
-        store.SaveState(new BackgroundProtectionState(
-            ["chrome", "CHROME", "  ", ""],
-            ["wallpaper64", "Wallpaper64", ""]), out _).Should().BeTrue();
+        store.SaveState(new BackgroundProtectionState(["chrome", "CHROME", "  ", ""]), out _)
+            .Should().BeTrue();
 
-        var load = store.LoadState();
-        load.State.Protected.Should().BeEquivalentTo(["chrome"]);
-        load.State.EndTargets.Should().BeEquivalentTo(["wallpaper64"]);
+        store.LoadState().State.Protected.Should().BeEquivalentTo(["chrome"]);
     }
 
     [Fact]
     public void 应接受带exe后缀的写法()
     {
-        // 用户常直接粘贴 "wallpaper64.exe"
+        // 用户常直接粘贴 "TranslucentTB.exe"
         var store = Store;
-        store.SaveState(new BackgroundProtectionState(
-            ["TranslucentTB.EXE"], ["wallpaper64.exe"]), out _).Should().BeTrue();
+        store.SaveState(new BackgroundProtectionState(["TranslucentTB.EXE"]), out _).Should().BeTrue();
 
-        var load = store.LoadState();
-        load.State.Protected.Should().BeEquivalentTo(["TranslucentTB"]);
-        load.State.EndTargets.Should().BeEquivalentTo(["wallpaper64"]);
+        store.LoadState().State.Protected.Should().BeEquivalentTo(["TranslucentTB"]);
     }
 
     [Fact]
-    public void 文件损坏时应退回空名单并明确报错()
+    public void 文件损坏时应退回空保护名单并明确报错()
     {
         WriteRaw("{ 这不是合法 JSON ");
 
         var load = Store.LoadState();
 
         load.State.Protected.Should().BeEmpty();
-        load.State.EndTargets.Should().BeEmpty();
-        load.Error.Should().NotBeNullOrWhiteSpace("读取失败必须可见，不能静默当成空配置");
+        load.Error.Should().NotBeNullOrWhiteSpace("读取失败必须可见，不能静默当成正常配置");
     }
 
     [Fact]
     public void 保存空名单后读回应为空而不是退回默认()
     {
-        // 用户把所有勾选都取消了，这个意图必须被记住。
-        // 退回默认名单会导致「我明明全取消了，它还是关了我的软件」。
         var store = Store;
         store.SaveState(BackgroundProtectionState.Empty, out _).Should().BeTrue();
 
-        var load = store.LoadState();
-        load.State.Protected.Should().BeEmpty();
-        load.State.EndTargets.Should().BeEmpty();
+        store.LoadState().State.Protected.Should().BeEmpty();
     }
 
     [Fact]
@@ -131,7 +115,7 @@ public class BackgroundWhitelistStoreTests : IDisposable
         try
         {
             new BackgroundWhitelistStore(nested)
-                .SaveState(new BackgroundProtectionState(["chrome"], []), out var error)
+                .SaveState(new BackgroundProtectionState(["chrome"]), out var error)
                 .Should().BeTrue(error);
             File.Exists(nested).Should().BeTrue();
         }
@@ -141,13 +125,29 @@ public class BackgroundWhitelistStoreTests : IDisposable
         }
     }
 
+    [Fact]
+    public void 写入的应是v3格式且只含保护名单()
+    {
+        var store = Store;
+        store.SaveState(new BackgroundProtectionState(["chrome"]), out _).Should().BeTrue();
+
+        var json = File.ReadAllText(_path);
+
+        json.Should().Contain("\"schemaVersion\": 3");
+        json.Should().Contain("protected");
+        json.Should().NotContain("endTargets", "结束目标已并入默认行为，不再单独存");
+        json.Should().NotContain("processes");
+    }
+
     // ---------- 旧配置迁移 ----------
 
     [Fact]
-    public void 旧版勾选项应按原语义迁移为结束目标而不是受保护()
+    public void 旧版勾选项不得被倒成受保护()
     {
         // 旧版：{"processes": [...]} 里的项「勾选 = 会被结束」。
-        // 迁移必须保留这个含义；倒成 protected 等于悄悄改掉用户的决定。
+        // 现在「没勾保护就会结束」，这些项本来就在结束范围内，
+        // 因此清单可以直接丢弃；但绝不能反过来把它们当保护项——
+        // 那会让用户以为游戏模式还在关它们，实际一个都没关。
         WriteRaw("""
         {
           "processes": ["wallpaper64", "telemetry_agent"]
@@ -157,14 +157,34 @@ public class BackgroundWhitelistStoreTests : IDisposable
         var load = Store.LoadState();
 
         load.MigratedFromLegacy.Should().BeTrue();
-        load.State.EndTargets.Should().BeEquivalentTo(["wallpaper64", "telemetry_agent"]);
-        load.State.Protected.Should().BeEmpty("旧配置里没有「保护」这个概念，不能凭空生出来");
+        load.State.Protected.Should().BeEmpty("旧配置里没有「保护」的概念，不能凭空生出来");
         load.Notice.Should().NotBeNullOrWhiteSpace("迁移必须提示用户核对");
-        load.Notice.Should().Contain("结束目标");
+        load.Notice.Should().Contain("结束范围");
     }
 
     [Fact]
-    public void 迁移后的保存应写成新版格式且不再重复迁移()
+    public void 旧版结束目标清单应被丢弃并保留保护名单()
+    {
+        // v2 文件：protected + endTargets。endTargets 现在没有意义（默认都结束），
+        // 但 protected 必须一字不差地保留下来。
+        WriteRaw("""
+        {
+          "schemaVersion": 2,
+          "protected": ["WeChat"],
+          "endTargets": ["wallpaper64"]
+        }
+        """);
+
+        var load = Store.LoadState();
+
+        load.State.Protected.Should().BeEquivalentTo(["WeChat"]);
+        load.MigratedFromLegacy.Should().BeTrue();
+        load.Notice.Should().NotBeNullOrWhiteSpace();
+        load.Notice.Should().Contain("并入默认行为");
+    }
+
+    [Fact]
+    public void 迁移后的保存应写成v3且不再重复迁移()
     {
         WriteRaw("""{ "processes": ["wallpaper64"] }""");
 
@@ -177,42 +197,30 @@ public class BackgroundWhitelistStoreTests : IDisposable
         var second = store.LoadState();
         second.MigratedFromLegacy.Should().BeFalse();
         second.Notice.Should().BeNull();
-        second.State.EndTargets.Should().BeEquivalentTo(["wallpaper64"]);
         second.State.Protected.Should().BeEmpty();
     }
 
     [Fact]
-    public void 旧配置里的系统进程同样不得迁移为结束目标()
-    {
-        WriteRaw("""{ "processes": ["explorer", "wallpaper64"] }""");
-
-        var load = Store.LoadState();
-
-        load.State.EndTargets.Should().BeEquivalentTo(["wallpaper64"]);
-    }
-
-    [Fact]
-    public void 空旧配置应迁移为空并给出提示()
+    public void 空旧配置也应给出提示()
     {
         WriteRaw("""{ "processes": [] }""");
 
         var load = Store.LoadState();
 
         load.MigratedFromLegacy.Should().BeTrue();
-        load.State.EndTargets.Should().BeEmpty();
+        load.State.Protected.Should().BeEmpty();
         load.Notice.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
     public void 结构无法识别的配置应保守处理为空并提示()
     {
-        // 认不出结构时绝不能猜「这些项大概是要结束的」——一项都不结束才是保守策略
+        // 认不出结构时不能猜，给空保护名单 + 提示，让用户有机会先去勾保护
         WriteRaw("""{ "whatever": ["wallpaper64"] }""");
 
         var load = Store.LoadState();
 
         load.State.Protected.Should().BeEmpty();
-        load.State.EndTargets.Should().BeEmpty();
         load.Notice.Should().NotBeNullOrWhiteSpace();
         load.Error.Should().BeNull();
     }
@@ -227,7 +235,7 @@ public class BackgroundWhitelistStoreTests : IDisposable
         {
             var store = new BackgroundWhitelistStore(Path.Combine(blocker, "list.json"));
 
-            store.SaveState(new BackgroundProtectionState(["chrome"], []), out var error)
+            store.SaveState(new BackgroundProtectionState(["chrome"]), out var error)
                 .Should().BeFalse();
             error.Should().NotBeNullOrWhiteSpace("保存失败必须能显示给用户");
         }
