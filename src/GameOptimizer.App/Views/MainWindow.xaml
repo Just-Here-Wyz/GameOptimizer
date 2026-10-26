@@ -30,6 +30,46 @@
         <views:NullToCollapsedInverseConverter x:Key="NullToCollapsedInverse"/>
         <!-- 空字符串 → 收起：未提权提示、优化结果有内容才占位 -->
         <views:StringToVisibilityConverter x:Key="StringToVisibility"/>
+        <!--
+          设置页的单选项：左边圆点 + 右边标题/说明两行。
+          选中态由「圆点填实 + 标题变蓝」两处共同表达，不只靠一行颜色——
+          深色底上单看颜色很容易分不清哪项是当前值。
+        -->
+        <Style x:Key="SettingRadio" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="#FFECEDEF"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Grid Width="16" Height="16" VerticalAlignment="Top" Margin="0,3,10,0">
+                                <Ellipse x:Name="Ring" Stroke="#FF5C5F66" StrokeThickness="1.3" Fill="Transparent"/>
+                                <Ellipse x:Name="Dot" Width="7" Height="7" Fill="#FF4C8DFF"
+                                         Visibility="Collapsed"/>
+                            </Grid>
+
+                            <ContentPresenter Grid.Column="1"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Ring" Property="Stroke" Value="#FF9AA0A6"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Ring" Property="Stroke" Value="#FF4C8DFF"/>
+                                <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <!-- 百分比 → 星号列宽：条形图按比例分宽度（绑 Width 会变成像素） -->
         <views:PercentToStarConverter x:Key="PercentToStar"/>
         <!--
@@ -929,6 +969,67 @@
                         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,20,24,24">
                             <StackPanel>
                                 <TextBlock Text="设置" Style="{StaticResource H1}" Margin="0,0,0,16"/>
+
+                                <!--
+                                  关闭行为：点右上角 × 时的三种处理方式。
+                                  选项由 Core 的 CloseBehaviorPolicy 判定与落盘，
+                                  这里只是把当前值绑上来——选了就写盘，与弹窗共用同一份配置。
+                                -->
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="关闭行为" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="点右上角 × 时怎么处理。改完立即生效，下一次点 × 就按新选择走。"
+                                                   Style="{StaticResource Faint}" Margin="0,4,0,12"
+                                                   TextWrapping="Wrap"/>
+
+                                        <RadioButton GroupName="CloseBehaviorSetting" Style="{StaticResource SettingRadio}"
+                                                     IsChecked="{Binding CloseBehaviorSettings.IsAskSelected, Mode=TwoWay}">
+                                            <StackPanel>
+                                                <TextBlock Text="每次询问" FontSize="13"/>
+                                                <TextBlock Text="每次点 × 都先问一次；选这项等于把之前记住的选择重置掉"
+                                                           Style="{StaticResource Faint}" Margin="0,3,0,0"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </RadioButton>
+
+                                        <RadioButton GroupName="CloseBehaviorSetting" Style="{StaticResource SettingRadio}"
+                                                     IsChecked="{Binding CloseBehaviorSettings.IsMinimizeSelected, Mode=TwoWay}">
+                                            <StackPanel>
+                                                <TextBlock Text="缩小到系统托盘" FontSize="13"/>
+                                                <TextBlock Text="隐藏主窗口，程序继续在后台跑，双击托盘图标可再打开"
+                                                           Style="{StaticResource Faint}" Margin="0,3,0,0"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </RadioButton>
+
+                                        <RadioButton GroupName="CloseBehaviorSetting" Style="{StaticResource SettingRadio}"
+                                                     IsChecked="{Binding CloseBehaviorSettings.IsExitSelected, Mode=TwoWay}"
+                                                     Margin="0">
+                                            <StackPanel>
+                                                <TextBlock Text="退出程序" FontSize="13"/>
+                                                <TextBlock Text="结束程序，退出前会先还原游戏模式做过的改动"
+                                                           Style="{StaticResource Faint}" Margin="0,3,0,0"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </RadioButton>
+
+                                        <Border Background="#FF15161A" CornerRadius="8" Padding="10,8" Margin="0,12,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding CloseBehaviorSettings.CurrentText}"
+                                                           FontSize="12"/>
+                                                <TextBlock Text="{Binding CloseBehaviorSettings.CurrentExplain}"
+                                                           Style="{StaticResource Faint}" Margin="0,3,0,0"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding CloseBehaviorSettings.StatusText}"
+                                                           FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap"
+                                                           Foreground="{Binding CloseBehaviorSettings.StatusHex}"/>
+                                                <TextBlock Text="{Binding CloseBehaviorSettings.ConfigPathText}"
+                                                           Style="{StaticResource Faint}" Margin="0,3,0,0"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
 
                                 <!-- 使用说明书：界面各页不再挂说明文字，统一到这里查 -->
                                 <Border Style="{StaticResource Card}">

@@ -16,7 +16,9 @@ public static class ToolManual
     [
         new("启动与退出",
             "启动时会请求管理员权限：内存优化、切换电源计划、结束高权限进程都需要它。\n" +
-            "点右上角关闭不会退出程序，窗口收进系统托盘继续采集；双击托盘图标恢复窗口，托盘右键「退出」才真正结束。"),
+            "第一次点右上角 × 会先问你「缩小到托盘」还是「退出程序」：勾上「记住我的选择」以后就不再问，" +
+            "随时可以在设置页改回「每次询问」。\n" +
+            "收进托盘后程序继续在后台运行，双击托盘图标恢复窗口；托盘右键「退出」直接结束，不会再问一遍。"),
 
         new("总览四个仪表",
             "显存占用：已用 / 本机可用显存。内存占用：已用 / 标称容量，下方的「优化」见第 3 节。\n" +
@@ -63,7 +65,8 @@ public static class ToolManual
             "外设电量显示「未知」：该设备走厂商私有协议，Windows 不提供电量接口。"),
 
         new("数据与隐私",
-            "全部数据只在本机：白名单存 %LocalAppData%\\GameOptimizer\\background-whitelist.json，下载任务存 downloads.json。\n" +
+            "全部数据只在本机：白名单存 %LocalAppData%\\GameOptimizer\\background-whitelist.json，" +
+            "下载任务存 downloads.json，关闭行为存 close-behavior.json。\n" +
             "不联网上传数据，不注入游戏进程，不安装驱动与系统服务。"),
     ];
 }

@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Windows;
+using System.Windows.Threading;
 using GameOptimizer.App.ViewModels;
 using GameOptimizer.App.Views;
 using GameOptimizer.Core.Collection;
@@ -17,6 +18,12 @@ public partial class App : Application
     private MainWindow? _window;
     private NotifyIcon? _tray;
     private bool _reallyExit;
+
+    /// <summary>
+    /// 「点 × 之后怎么处理」的判定与持久化。正常启动路径上一定会被创建；
+    /// 只有离屏渲染（--render）那种不建窗口的路径才没有它。
+    /// </summary>
+    private CloseBehaviorService? _closeBehavior;
 
     /// <summary>单实例锁。必须常驻字段：被 GC 回收等于主动放开锁，第二个实例就能挤进来。</summary>
     private SingleInstanceGate? _gate;
@@ -46,8 +53,10 @@ public partial class App : Application
             return;
         }
 
-        // 托盘运行：关窗口 = 隐藏到托盘，只有托盘菜单「退出」才真正结束。
-        // 因此不能用 OnMainWindowClose——主窗口一关进程就没了。
+        // 托盘运行：关窗口的行为由用户选择（缩到托盘 / 退出 / 每次询问）。
+        // 三种结局都不会走 OnMainWindowClose——即便选了「退出程序」，
+        // 也是先 Cancel 掉这次系统关闭、再由 ExitApplication 走正常退出流程，
+        // 否则 OnExit 里的游戏模式还原可能被打断。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
         // 提权保险：清单已声明 requireAdministrator，双击本应直接弹 UAC。
@@ -76,12 +85,19 @@ public partial class App : Application
 
         RecoverFromAbnormalExit();
 
+        // 关闭行为：启动时读一次盘。读不出来就是「每次询问」，原因留给设置页显示，
+        // 绝不因为一个坏掉的配置让程序起不来，也绝不替用户猜「退出」还是「缩到托盘」。
+        _closeBehavior = new CloseBehaviorService();
+
         _sampler = new PdhSampler();
         var ready = _sampler.Initialize();
         if (ready) _sampler.Warmup();
 
         var mode = BuildGameMode();
-        _vm = new MainViewModel(_sampler, ready, mode);
+
+        // 设置页与关闭流程共用同一个 service：各建一个实例的话，
+        // 设置页改完只是写进了磁盘，关闭流程手里的还是旧值，要重启才生效。
+        _vm = new MainViewModel(_sampler, ready, mode, closeBehaviorService: _closeBehavior);
         _window = new MainWindow { DataContext = _vm };
         MainWindow = _window;
 
@@ -246,25 +262,130 @@ public partial class App : Application
         _vm?.SetSamplingActive(true);
     }
 
-    /// <summary>关窗口不退出：隐藏到托盘。只有 _reallyExit 时才放行真正关闭。</summary>
+    /// <summary>
+    /// 点主窗口 × 时的分流：询问 / 收进托盘 / 退出。
+    ///
+    /// <b>这里先 Cancel，再决定结局</b>：无论用户怎么选，都不能让窗口在
+    /// 「还没确认」的时候自己消失。真正的关闭只有一条路——<see cref="ExitApplication"/>，
+    /// 它先把 <see cref="_reallyExit"/> 置位，下一次 Closing 才会被放行。
+    ///
+    /// 决策本身不在这里：已保存行为 → 该做什么由 Core 的
+    /// <see cref="CloseBehaviorService.RequestClose"/> 判定，重入守卫也在那边
+    /// （弹窗开着时重复点 × 返回 Ignore，不会叠出第二个窗口、也不会提前隐藏）。
+    /// </summary>
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
+        // 托盘「退出」/ 已确认退出：放行真正的关闭，绝不再问一遍
         if (_reallyExit) return;
 
-        // 关窗口 = 收进托盘（最初要求：托盘常驻，后台运行）
-        // 同时停掉每秒采集：托盘常驻可能一整天不再打开，没人看的读数纯属白烧 CPU
-        _vm?.SetSamplingActive(false);
+        var route = _closeBehavior?.RequestClose() ?? CloseRoute.HideToTray;
+
         e.Cancel = true;
+
+        switch (route)
+        {
+            case CloseRoute.HideToTray:
+                HideToTray();
+                break;
+
+            case CloseRoute.Exit:
+                RequestExit();
+                break;
+
+            case CloseRoute.Ask:
+                // 弹窗必须等 Closing 这一轮跑完再开：
+                // 在 Closing 处理函数里同步 ShowDialog，等于让一个「正在关闭」的窗口当 Owner。
+                Dispatcher.BeginInvoke(new Action(ShowCloseBehaviorPrompt), DispatcherPriority.Normal);
+                break;
+
+            // CloseRoute.Ignore：弹窗已经在等结果，这次点击什么都不做
+            // CloseRoute.None：用户取消过，主窗口保持原样
+        }
+    }
+
+    /// <summary>
+    /// 收进托盘：隐藏主窗口、停掉每秒采集，后台功能（托盘图标、定时器外的逻辑）继续跑。
+    /// 与 v2.3.0 的行为完全一致，只是不再无条件执行——要用户选过或保存过才会走到这里。
+    /// </summary>
+    private void HideToTray()
+    {
+        // 托盘常驻可能一整天不再打开，没人看的读数纯属白烧 CPU
+        _vm?.SetSamplingActive(false);
 
         // 浮窗跟着一起隐藏：否则主界面收进托盘后，屏幕角落会留一个「没有主人」的窗口
         _window?.HideBackgroundWindow();
         _window?.Hide();
     }
 
-    /// <summary>托盘「退出」：还原游戏模式后真正结束进程。</summary>
+    /// <summary>
+    /// 弹窗询问关闭行为，并按结果执行。
+    ///
+    /// 三条失败路径都必须「什么都不做」：
+    /// 用户取消、直接关窗、弹窗根本打不开——主窗口保持显示，程序继续跑。
+    /// </summary>
+    private void ShowCloseBehaviorPrompt()
+    {
+        CloseBehaviorChoice? choice;
+
+        try
+        {
+            var viewModel = new CloseBehaviorPromptViewModel();
+            var dialog = new CloseBehaviorWindow { DataContext = viewModel };
+
+            // Owner 只用于居中与遮挡：必要时没有主窗口也要能开出来
+            if (_window is not null) dialog.Owner = _window;
+
+            dialog.ShowDialog();
+
+            // 关窗 / Esc / 取消都让 Result 保持 null
+            choice = viewModel.Result;
+        }
+        catch (Exception ex)
+        {
+            // 弹窗起不来不能悄悄当成「取消」之外的任何结果，更不能顺手把窗口藏掉
+            _closeBehavior?.AbandonPrompt();
+            MessageBox.Show(
+                $"关闭行为选择窗口无法打开：{ex.Message}\n\n主窗口保持显示，本次关闭已取消。",
+                "游戏优化助手 — 关闭",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var route = _closeBehavior?.CompletePrompt(choice) ?? CloseRoute.None;
+
+        switch (route)
+        {
+            case CloseRoute.HideToTray:
+                HideToTray();
+                break;
+
+            case CloseRoute.Exit:
+                ExitApplication();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 按保存的行为「退出程序」时调用。
+    /// 先 Cancel 掉当前这次关闭，再把真正的退出推到下一轮消息循环：
+    /// 直接在 Closing 的调用栈里 Shutdown，会在「正在关窗」的栈上再关同一个窗口。
+    /// </summary>
+    private void RequestExit()
+    {
+        if (_reallyExit) return;
+        Dispatcher.BeginInvoke(new Action(ExitApplication), DispatcherPriority.Normal);
+    }
+
+    /// <summary>托盘「退出」与「关闭行为=退出」共用的唯一退出路径：还原游戏模式后真正结束进程。</summary>
     private void ExitApplication()
     {
+        if (_reallyExit) return;
+
         _reallyExit = true;
+
+        // 记下「已确认退出」：之后任何关闭请求都直接放行，不会再弹询问
+        _closeBehavior?.ConfirmExit();
+
         _tray?.Dispose();
         _tray = null;
         Shutdown();

@@ -19,7 +19,7 @@ using System.Windows.Media.Imaging;
 /// 再渲染那个 Border。
 ///
 /// 用法：<c>GameOptimizer.App.dll --render &lt;输出目录&gt; [页面名,...]</c>
-/// 页面名可选 home / peripherals / download / settings / cpu / background / restore，缺省渲染全部。
+/// 页面名可选 home / peripherals / download / settings / cpu / background / restore / close，缺省渲染全部。
 ///
 /// 截图会进 README（公开仓库），所以渲染全程按「演示状态」跑：
 /// 提权状态按已提权处理、路径里的用户目录脱敏、下载目录用中性值。
@@ -99,7 +99,39 @@ internal static class OffscreenRenderer
             written.Add(path);
         }
 
+        // 关闭行为选择弹窗（v2.5）：同样是独立窗口
+        if (wanted is null || wanted.Contains(CloseDialogPageName))
+        {
+            var path = Path.Combine(outputDirectory, $"page-{CloseDialogPageName}.png");
+            RenderCloseDialog(path);
+            written.Add(path);
+        }
+
         return string.Join(Environment.NewLine, written);
+    }
+
+    /// <summary>关闭行为弹窗的页面名。</summary>
+    private const string CloseDialogPageName = "close";
+
+    /// <summary>
+    /// 渲染「点 × 之后怎么处理」弹窗。
+    /// 演示数据是空的 ViewModel：默认选中「缩小到系统托盘」、不勾「记住」，
+    /// 正好是用户第一次见到的样子。
+    /// </summary>
+    private static void RenderCloseDialog(string outputPath)
+    {
+        Trace("start close");
+
+        var window = new GameOptimizer.App.Views.CloseBehaviorWindow
+        {
+            DataContext = new GameOptimizer.App.ViewModels.CloseBehaviorPromptViewModel(),
+        };
+
+        var content = (UIElement)window.Content;
+        window.Content = null;
+
+        RenderContent(content, window.DataContext, 520, 360, outputPath);
+        Trace("close shot saved");
     }
 
     /// <summary>浮窗的页面名（--render 的过滤参数用它）。</summary>
@@ -427,7 +459,13 @@ internal static class OffscreenRenderer
                 Path.Combine(Path.GetTempPath(), "go-render-whitelist.json")),
 
             // 渲染进程从不提权，按已提权处理，否则每张图都会多一条黄色警告横幅
-            elevatedOverride: true);
+            elevatedOverride: true,
+
+            // 关闭行为也用临时文件：设置页截图里的「当前」应该是默认的每次询问，
+            // 更不能因为拍一张图就改掉使用者真实的选择
+            closeBehaviorService: new GameOptimizer.Core.Library.CloseBehaviorService(
+                new GameOptimizer.Core.Library.CloseBehaviorStore(
+                    Path.Combine(Path.GetTempPath(), "go-render-close-behavior.json"))));
     }
 
     /// <summary>

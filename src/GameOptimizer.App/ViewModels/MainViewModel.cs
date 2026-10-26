@@ -66,13 +66,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// 只有离屏渲染会传 true：渲染进程从不提权，不覆盖的话每张截图都会多一条
     /// 「当前未以管理员身份运行」的黄条——那是截图环境的产物，不是用户看到的样子。
     /// </param>
+    /// <param name="closeBehaviorService">
+    /// 关闭行为服务。<b>必须与 App 的关闭流程共用同一个实例</b>：各建一个的话，
+    /// 设置页改完只是写进了磁盘，关闭流程手里的还是旧值，要重启才生效。
+    /// 离屏渲染会传临时文件，避免截图过程改动使用者真实的配置。
+    /// </param>
     public MainViewModel(
         PdhSampler sampler,
         bool samplerReady,
         GameModeController gameMode,
         DownloadStore? downloadStore = null,
         BackgroundWhitelistStore? whitelistStore = null,
-        bool? elevatedOverride = null)
+        bool? elevatedOverride = null,
+        CloseBehaviorService? closeBehaviorService = null)
     {
         IsElevated = elevatedOverride ?? ElevationStatus.IsCurrentProcessElevated();
         _sampler = sampler;
@@ -80,6 +86,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _whitelistStore = whitelistStore ?? new BackgroundWhitelistStore();
         SamplerReady = samplerReady;
         SamplerStatus = samplerReady ? "采集就绪" : $"采集不可用：{sampler.LastError}";
+
+        // 设置页的「关闭行为」卡片（见 CloseBehaviorSettingsViewModel）：
+        // 与 App.OnWindowClosing 共用同一个 service，改完立刻对下一次点 × 生效。
+        CloseBehaviorSettings = new CloseBehaviorSettingsViewModel(
+            closeBehaviorService ?? new CloseBehaviorService());
 
         // 下载器（v2.2.0）：服务本身在 Core，这里只建一个实例并交给下载页的 ViewModel。
         // 下载与采集互不影响：上传/下载不动 PDH 计数器，共用事件循环也不会互相拖慢。
@@ -201,6 +212,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>设置页的使用说明书。界面不再各页散落说明文字，统一从这里读。</summary>
     public IReadOnlyList<ManualSection> ManualSections => ToolManual.Sections;
+
+    /// <summary>设置页「关闭行为」卡片：每次询问 / 缩小到托盘 / 退出程序。</summary>
+    public CloseBehaviorSettingsViewModel CloseBehaviorSettings { get; }
 
     /// <summary>
     /// 权限状态：清单里已声明 requireAdministrator，双击即提权。
