@@ -117,7 +117,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ProtectAllBackgroundCommand = new RelayCommand(_ => SetAllProtected(true));
         UnprotectAllBackgroundCommand = new RelayCommand(_ => SetAllProtected(false));
 
-        ScanPeripheralsCommand = new RelayCommand(_ => RefreshPeripherals());
+        ScanPeripheralsCommand = new RelayCommand(_ => _ = RefreshPeripheralsAsync());
         OptimizeMemoryCommand = new RelayCommand(_ => OptimizeMemory(), _ => !IsMemoryCleaning);
 
         // 首页 CPU 卡片：点非按钮区域进诊断页；「CPU 优化」按钮走独立的快速优化流程。
@@ -146,7 +146,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LoadBackgroundProcesses();
 
         RefreshAllGameStatus();
-        RefreshPeripherals();
+
+        // 外设扫描走后台线程（见 RefreshPeripheralsAsync），这里不等它，界面先出
+        _ = RefreshPeripheralsAsync();
 
         if (samplerReady) _timer.Start();
     }
@@ -749,30 +751,56 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _peripheralStatus = "";
     public string PeripheralStatus { get => _peripheralStatus; private set { _peripheralStatus = value; OnPropertyChanged(); } }
 
-    /// <summary>重新扫描外设。插拔设备后手动触发。</summary>
-    public void RefreshPeripherals()
+    private bool _peripheralScanning;
+
+    /// <summary>
+    /// 重新扫描外设。插拔设备后手动触发，启动时也走这里。
+    ///
+    /// 枚举要 SetupAPI 走完整棵设备树、每个 HID 接口再开一次句柄读型号，
+    /// 放在 UI 线程会直接卡住界面（现改为后台线程枚举，结果再回填集合）。
+    /// 同一次扫描没结束时再次点击直接忽略，避免叠出两轮结果。
+    /// </summary>
+    public async Task RefreshPeripheralsAsync()
     {
-        var result = _peripherals.Scan();
+        if (_peripheralScanning) return;
 
-        Peripherals.Clear();
-        foreach (var d in result.Devices)
-            Peripherals.Add(new PeripheralItem(d));
+        _peripheralScanning = true;
+        PeripheralStatus = "正在扫描外设…";
 
-        if (result.Error is not null)
+        try
         {
-            PeripheralStatus = result.Error;
-            return;
-        }
+            // 扫描本身不碰界面；回到 UI 上下文再改集合
+            var result = await Task.Run(_peripherals.Scan);
 
-        if (result.Devices.Count == 0)
+            Peripherals.Clear();
+            foreach (var d in result.Devices)
+                Peripherals.Add(new PeripheralItem(d));
+
+            if (result.Error is not null)
+            {
+                PeripheralStatus = result.Error;
+                return;
+            }
+
+            if (result.Devices.Count == 0)
+            {
+                PeripheralStatus = "未发现外设";
+                return;
+            }
+
+            var wired = result.Devices.Count(d => d.IsWired);
+            PeripheralStatus = $"{result.Devices.Count} 个外设 · 有线 {wired} · 无线 {result.Devices.Count - wired}" +
+                               $" · 上次刷新 {DateTime.Now:HH:mm:ss}";
+        }
+        catch (Exception ex)
         {
-            PeripheralStatus = "未发现外设";
-            return;
+            // 扫描失败必须显示出来，不能留一屏旧数据假装正常
+            PeripheralStatus = $"扫描外设失败：{ex.Message}";
         }
-
-        var wired = result.Devices.Count(d => d.IsWired);
-        PeripheralStatus = $"{result.Devices.Count} 个外设 · 有线 {wired} · 无线 {result.Devices.Count - wired}" +
-                           $" · 上次刷新 {DateTime.Now:HH:mm:ss}";
+        finally
+        {
+            _peripheralScanning = false;
+        }
     }
 
     // ---------- 后台进程保护（v2.4：勾选即保护） ----------
@@ -1948,6 +1976,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 /// <summary>外设卡片的数据项：把 Core 的模型转成界面直接能绑的文本与颜色。</summary>
 public sealed class PeripheralItem(PeripheralDevice device)
 {
+    /// <summary>角标短标签：鼠标 / 键盘 / 耳机 / 未知。</summary>
+    public string KindBadge => device.KindBadge;
+
     public string KindText => device.KindText;
     public string Model => device.Model;
 
@@ -1957,17 +1988,32 @@ public sealed class PeripheralItem(PeripheralDevice device)
 
     public string ConnectionText => device.ConnectionText;
 
+    /// <summary>
+    /// 分类依据：类型结论从哪来（用途页 / 设备类 / 描述文字）。
+    /// 界面必须能回答「凭什么说这是键盘」，否则分类错了没人复核得了。
+    /// </summary>
+    public string BasisText => string.IsNullOrWhiteSpace(device.Basis) ? "分类依据未记录" : device.Basis;
+
+    /// <summary>设备实例 ID，排查误识别时的第一手信息。</summary>
+    public string InstanceIdText => device.InstanceHint;
+    public string InstanceLabel => $"实例 ID：{device.InstanceHint}";
+
+    /// <summary>同一台复合设备按接口拆成两张卡时，用这句提示别当成两台设备。</summary>
+    public bool IsComposite => device.IsComposite;
+
     /// <summary>连接方式标签的底色：有线 = 蓝色主题（用户要求），无线 = 绿色。</summary>
     public string ConnectionAccentHex => device.IsWired ? "#FF4C8DFF" : "#FF34C759";
 
-    /// <summary>整张卡的主题色：有线一律蓝，无线按电量危险程度。</summary>
-    public string ThemeHex => device.IsWired
-        ? "#FF4C8DFF"
-        : device.BatteryPercent is { } p
-            ? OccupancyPalette.ColorHex(p <= 20 ? OccupancyLevel.Critical
-                                     : p <= 40 ? OccupancyLevel.High
-                                     : OccupancyLevel.Low)
-            : "#FF5C5F66";
+    /// <summary>整张卡的主题色：有线一律蓝，无线按电量危险程度；类型未知时用中性灰，不冒充已确认类型。</summary>
+    public string ThemeHex => device.Kind == PeripheralKind.Unknown
+        ? "#FF5C5F66"
+        : device.IsWired
+            ? "#FF4C8DFF"
+            : device.BatteryPercent is { } p
+                ? OccupancyPalette.ColorHex(p <= 20 ? OccupancyLevel.Critical
+                                         : p <= 40 ? OccupancyLevel.High
+                                         : OccupancyLevel.Low)
+                : "#FF5C5F66";
 
     public int? BatteryPercent => device.BatteryPercent;
     public bool IsWired => device.IsWired;

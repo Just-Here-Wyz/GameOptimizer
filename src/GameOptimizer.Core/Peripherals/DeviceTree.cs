@@ -39,6 +39,11 @@ internal static class DeviceTree
     /// <summary>DEVPKEY_Bluetooth_Battery：Windows 10+ 给蓝牙外设的 0~100 电量。</summary>
     internal static readonly DEVPROPKEY KeyBluetoothBattery = Key(BluetoothGuid, 4);
 
+    // 关于兼容 ID（DEVPKEY_Device_CompatibleIds）：已确认它只出现在 USB 接口节点上
+    // （`USB\Class_03&SubClass_01`），而本页按 HID 功能节点归类。
+    // 把接口节点的兼容 ID 当分类依据会为同一只设备多造一张卡，所以只读硬件 ID 里的
+    // 「用途页 + 用法」对，不读兼容 ID —— 这条是刻意不做的，不是漏了。
+
     /// <summary>设备节点（已解析好的属性快照）。</summary>
     internal sealed record Node(
         string InstanceId,
@@ -73,30 +78,39 @@ internal static class DeviceTree
             {
                 if (!SetupDiEnumDeviceInfo(set, i, ref data)) break;
 
-                var instanceId = GetInstanceId(set, ref data);
-                if (string.IsNullOrWhiteSpace(instanceId)) continue;
+                // 单个节点读属性失败（权限 / 驱动异常 / 属性类型不符）只跳过这一条，
+                // 不能让一棵树里的一条坏节点把整次扫描废掉。
+                try
+                {
+                    var instanceId = GetInstanceId(set, ref data);
+                    if (string.IsNullOrWhiteSpace(instanceId)) continue;
 
-                var className = GetRegistryString(set, ref data, SPDRP_CLASS) ?? "";
-                var hardwareIds = ReadStringList(instanceId, KeyHardwareIds);
+                    var className = GetRegistryString(set, ref data, SPDRP_CLASS) ?? "";
+                    var hardwareIds = ReadStringList(instanceId, KeyHardwareIds);
 
-                var hid = hidProducts.GetValueOrDefault(instanceId);
+                    var hid = hidProducts.GetValueOrDefault(instanceId);
 
-                var container = ReadGuid(instanceId, KeyContainerId);
-                // 系统给「无法归组」的设备塞这个占位 GUID，不能当成真实容器
-                if (container == new Guid("00000000-0000-0000-FFFF-FFFFFFFFFFFF")) container = null;
+                    var container = ReadGuid(instanceId, KeyContainerId);
+                    // 系统给「无法归组」的设备塞这个占位 GUID，不能当成真实容器
+                    if (container == new Guid("00000000-0000-0000-FFFF-FFFFFFFFFFFF")) container = null;
 
-                result.Add(new Node(
-                    instanceId,
-                    className,
-                    ReadString(instanceId, KeyFriendlyName) ?? GetRegistryString(set, ref data, SPDRP_FRIENDLYNAME),
-                    ReadString(instanceId, KeyBusReportedDesc),
-                    ReadString(instanceId, KeyDeviceDesc) ?? GetRegistryString(set, ref data, SPDRP_DEVICEDESC),
-                    hardwareIds,
-                    ReadString(instanceId, KeyParent),
-                    container,
-                    ReadInt(instanceId, KeyBluetoothBattery),
-                    hid.Product,
-                    hid.Manufacturer));
+                    result.Add(new Node(
+                        instanceId,
+                        className,
+                        ReadString(instanceId, KeyFriendlyName) ?? GetRegistryString(set, ref data, SPDRP_FRIENDLYNAME),
+                        ReadString(instanceId, KeyBusReportedDesc),
+                        ReadString(instanceId, KeyDeviceDesc) ?? GetRegistryString(set, ref data, SPDRP_DEVICEDESC),
+                        hardwareIds,
+                        ReadString(instanceId, KeyParent),
+                        container,
+                        ReadInt(instanceId, KeyBluetoothBattery),
+                        hid.Product,
+                        hid.Manufacturer));
+                }
+                catch
+                {
+                    // 跳过这一条，继续枚举下一个设备节点
+                }
             }
         }
         finally

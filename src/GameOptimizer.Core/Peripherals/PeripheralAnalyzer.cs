@@ -11,7 +11,8 @@ namespace GameOptimizer.Core.Peripherals;
 /// 2. 触摸板在 Windows 里同样归到 Mouse 类，硬件 ID 也带 UP:0001_U:0002，
 ///    只能靠「父设备是 ACPI」把它排除，否则笔记本会凭空多一只鼠标。
 /// 3. 复合接收器（VXE NordicMouse）同时上报鼠标和键盘集合。
-///    它是一只鼠标，不能因为多了一个键盘集合就变成两台设备。
+///    产品名能判定主功能时只出一张卡，判不出来时按接口各出一张 ——
+///    但**绝不**默认成鼠标（这条兜底已删除）。
 /// 4. 虚拟 HID 框架（VHF）会把 `HID VHF Driver` 塞进键盘列表，必须剔除。
 /// 5. 耳机只从音频端点识别。HID 消费类集合（音量键）不代表耳机，
 ///    键盘上的媒体键也会带同样的用途页。
@@ -28,7 +29,7 @@ public static class PeripheralAnalyzer
         devices.AddRange(BuildInputDevices(nodes, batteryByContainer));
         devices.AddRange(BuildHeadsets(nodes, batteryByContainer));
 
-        // 顺序固定为 鼠标 → 键盘 → 耳机，界面不用再排
+        // 顺序固定为 鼠标 → 键盘 → 耳机 → 未知，界面不用再排
         return devices
             .OrderBy(d => (int)d.Kind)
             .ThenBy(d => d.Model, StringComparer.OrdinalIgnoreCase)
@@ -53,19 +54,23 @@ public static class PeripheralAnalyzer
         IReadOnlyList<PeripheralNode> nodes,
         IReadOnlyDictionary<Guid, int> batteryByContainer)
     {
-        // 同一物理设备 → 它上报的所有 (类别, 节点)
-        var grouped = new Dictionary<string, List<(PeripheralKind Kind, PeripheralNode Node)>>(StringComparer.OrdinalIgnoreCase);
+        // 同一物理设备 → 它上报的所有 (接口结论, 节点)
+        var grouped = new Dictionary<string, List<(PeripheralInterface Interface, PeripheralNode Node)>>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var node in nodes)
         {
             if (IsTouchDevice(node) || IsVirtualDevice(node)) continue;
 
-            var kind = PeripheralClassifier.FromHidHardwareIds(node.HardwareIds, node.ClassName);
-            if (kind is not { } k) continue;
+            // 类型只由「用途页 / 设备类」这类结构化信息给出；
+            // 驱动描述仅在没有结构化证据时用来解释「为什么算未知」。
+            var iface = PeripheralClassifier.ClassifyInterface(
+                node.HardwareIds, node.ClassName, node.DeviceDesc ?? node.FriendlyName ?? node.BusReportedDesc);
+
+            if (iface is null) continue;
 
             // 笔记本自带键盘（ACPI 下直连主板的 PS/2 / I2C 键盘）不展示，
             // 外接键盘挂在 USB / BTHENUM 下不受影响
-            if (k == PeripheralKind.Keyboard && IsBuiltInKeyboard(node)) continue;
+            if (iface.Has(PeripheralKind.Keyboard) && IsBuiltInKeyboard(node)) continue;
 
             var key = DeviceKey(node);
             if (!grouped.TryGetValue(key, out var list))
@@ -73,80 +78,153 @@ public static class PeripheralAnalyzer
                 list = [];
                 grouped[key] = list;
             }
-            list.Add((k, node));
+            list.Add((iface, node));
         }
 
         var result = new List<PeripheralDevice>();
 
         foreach (var group in grouped.Values)
-        {
-            var nodesOfDevice = group.Select(g => g.Node).ToList();
-            var kind = ResolveKind(group);
-
-            // 同一物理设备只算一台：优先取「有型号」的节点作代表
-            var primary = group
-                .OrderByDescending(g => !string.IsNullOrWhiteSpace(g.Node.HidProduct))
-                .ThenByDescending(g => g.Node.BatteryPercent is not null)
-                .First()
-                .Node;
-
-            var model = primary.HidProduct
-                ?? primary.BusReportedDesc
-                ?? primary.FriendlyName
-                ?? primary.DeviceDesc;
-
-            // 驱动描述里的「USB 输入设备」不是型号，宁可显示未知也不要糊弄
-            var cleaned = PeripheralClassifier.CleanModel(model, fallback: "");
-            if (string.IsNullOrWhiteSpace(cleaned)) continue;
-
-            var battery = nodesOfDevice.Select(n => n.BatteryPercent).FirstOrDefault(v => v is not null);
-            if (battery is null && primary.ContainerId is { } container)
-                battery = batteryByContainer.GetValueOrDefault(container) is var b and > 0 ? b : null;
-
-            var source = battery is null
-                ? null
-                : (nodesOfDevice.Select(n => n.BatterySource).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
-                   ?? "蓝牙电量上报");
-
-            var byBus = PeripheralClassifier.FromBus(primary.InstanceId);
-            var byName = PeripheralClassifier.FromProductName(primary.HidProduct ?? primary.BusReportedDesc);
-            var connection = PeripheralClassifier.Resolve(byName ?? byBus, battery, hasBatteryDeviceNode: false);
-
-            result.Add(new PeripheralDevice(
-                kind,
-                cleaned,
-                group.Select(g => g.Node.Manufacturer).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)),
-                connection,
-                battery,
-                source,
-                primary.InstanceId));
-        }
+            result.AddRange(BuildGroupDevices(group, batteryByContainer));
 
         return result;
     }
 
     /// <summary>
-    /// 一台物理设备同时上报鼠标与键盘时该算哪一类。
-    /// 按产品名判断：`VXE NordicMouse 1K Dongle` 带 Mouse → 算鼠标；
-    /// `Gaming Keyboard G610` → 算键盘；名字看不出来时按鼠标优先
-    /// （复合接收器的键盘集合通常只是快捷键，主用途是鼠标）。
+    /// 一台物理设备 → 一张或两张卡片。
+    ///
+    /// - 只有一类接口：一张卡。
+    /// - 键盘与鼠标接口同时存在（复合接收器、带指点杆的键盘、带宏接口的游戏键盘）：
+    ///   1. 设备**自报的产品名**能判定主功能（`VXE NordicMouse 1K Dongle`、`Gaming Keyboard G610`）
+    ///      → 按主功能出**一张**卡，依据里写明它同时提供另一类接口；
+    ///   2. 判不出来 → **按接口各出一张**，各自标注类型并说明同属一台复合设备。
+    ///
+    /// 关键：**没有「默认鼠标」这条兜底了**。早期版本在名字里看不出类型时直接算鼠标，
+    /// 结果一只键盘只要多带一个指针集合就被整台改成鼠标（本页最严重的误识别）。
     /// </summary>
-    private static PeripheralKind ResolveKind(List<(PeripheralKind Kind, PeripheralNode Node)> group)
+    private static IReadOnlyList<PeripheralDevice> BuildGroupDevices(
+        List<(PeripheralInterface Interface, PeripheralNode Node)> group,
+        IReadOnlyDictionary<Guid, int> batteryByContainer)
     {
-        var kinds = group.Select(g => g.Kind).Distinct().ToList();
-        if (kinds.Count == 1) return kinds[0];
+        var kinds = group.SelectMany(g => g.Interface.Kinds).Distinct().ToList();
 
-        var name = string.Join(" ", group.Select(g => g.Node.HidProduct ?? g.Node.FriendlyName ?? ""));
-        if (name.Contains("keyboard", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("键盘", StringComparison.Ordinal))
-            return PeripheralKind.Keyboard;
+        // 「未知」只是没有证据时的兜底：同一个设备上只要有一条结构性结论，就按结论展示
+        var definitive = kinds.Where(k => k != PeripheralKind.Unknown).ToList();
 
-        if (name.Contains("mouse", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("鼠标", StringComparison.Ordinal))
-            return PeripheralKind.Mouse;
+        if (definitive.Count <= 1)
+        {
+            var kind = definitive.Count == 1 ? definitive[0] : PeripheralKind.Unknown;
+            var device = CreateInputDevice(kind, group, batteryByContainer, BasisFor(group, kind), isComposite: false);
+            return device is null ? [] : [device];
+        }
 
-        return kinds.Contains(PeripheralKind.Mouse) ? PeripheralKind.Mouse : kinds[0];
+        // 自报型号是设备自己说的话，可以当作复合设备「主功能」的辅助线索（不用于单接口设备）
+        var productNames = group
+            .Select(g => g.Node.HidProduct)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var hint = productNames.Select(PeripheralClassifier.FromTextHint).FirstOrDefault(k => k is not null);
+
+        if (hint is { } main && definitive.Contains(main))
+        {
+            var others = definitive.Where(k => k != main).Select(KindName).ToList();
+            var basis = $"{BasisFor(group, main)}；同一设备还提供{string.Join(" / ", others)}接口，" +
+                        $"按自报型号「{string.Join(" / ", productNames)}」展示主功能";
+
+            var device = CreateInputDevice(main, group, batteryByContainer, basis, isComposite: true);
+            return device is null ? [] : [device];
+        }
+
+        // 判不出主功能就按接口分别展示：不把整台设备强行归成鼠标
+        var sharedBasis = $"复合设备：同时提供{string.Join(" 与 ", definitive.Select(KindName))}接口，" +
+                          "没有自报型号可判定主功能，按接口分别展示";
+
+        var split = new List<PeripheralDevice>();
+        foreach (var kind in definitive.Where(k => k is PeripheralKind.Keyboard or PeripheralKind.Mouse))
+        {
+            var device = CreateInputDevice(kind, group, batteryByContainer, sharedBasis, isComposite: true);
+            if (device is not null) split.Add(device);
+        }
+
+        return split;
     }
+
+    /// <summary>按类别造一台设备。型号 / 电池 / 连接方式优先取该类别对应的节点。</summary>
+    private static PeripheralDevice? CreateInputDevice(
+        PeripheralKind kind,
+        List<(PeripheralInterface Interface, PeripheralNode Node)> group,
+        IReadOnlyDictionary<Guid, int> batteryByContainer,
+        string basis,
+        bool isComposite)
+    {
+        var candidates = group.Where(g => g.Interface.Has(kind)).ToList();
+        if (candidates.Count == 0) candidates = group;
+
+        var nodesOfDevice = candidates.Select(c => c.Node).ToList();
+
+        // 同一物理设备只算一台：优先取「有型号」的节点作代表
+        var primary = candidates
+            .OrderByDescending(g => !string.IsNullOrWhiteSpace(g.Node.HidProduct))
+            .ThenByDescending(g => g.Node.BatteryPercent is not null)
+            .First()
+            .Node;
+
+        var model = primary.HidProduct
+            ?? primary.BusReportedDesc
+            ?? primary.FriendlyName
+            ?? primary.DeviceDesc;
+
+        // 驱动描述里的「USB 输入设备」不是型号，宁可显示未知也不要糊弄
+        var cleaned = PeripheralClassifier.CleanModel(model, fallback: "");
+        if (string.IsNullOrWhiteSpace(cleaned)) return null;
+
+        var battery = nodesOfDevice.Select(n => n.BatteryPercent).FirstOrDefault(v => v is not null);
+        if (battery is null && primary.ContainerId is { } container)
+            battery = batteryByContainer.GetValueOrDefault(container) is var b and > 0 ? b : null;
+
+        var source = battery is null
+            ? null
+            : (nodesOfDevice.Select(n => n.BatterySource).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
+               ?? "蓝牙电量上报");
+
+        var byBus = PeripheralClassifier.FromBus(primary.InstanceId);
+        var byName = PeripheralClassifier.FromProductName(primary.HidProduct ?? primary.BusReportedDesc);
+        var connection = PeripheralClassifier.Resolve(byName ?? byBus, battery, hasBatteryDeviceNode: false);
+
+        return new PeripheralDevice(
+            kind,
+            cleaned,
+            group.Select(g => g.Node.Manufacturer).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)),
+            connection,
+            battery,
+            source,
+            primary.InstanceId,
+            basis,
+            isComposite);
+    }
+
+    /// <summary>取该类别的分类依据：优先用报了这类接口的节点，避免把鼠标节点的依据写到键盘卡上。</summary>
+    private static string BasisFor(
+        List<(PeripheralInterface Interface, PeripheralNode Node)> group,
+        PeripheralKind kind)
+    {
+        foreach (var (iface, _) in group)
+        {
+            if (iface.Has(kind)) return iface.Basis;
+        }
+
+        return group.Count > 0 ? group[0].Interface.Basis : "";
+    }
+
+    private static string KindName(PeripheralKind kind) => kind switch
+    {
+        PeripheralKind.Mouse => "鼠标",
+        PeripheralKind.Keyboard => "键盘",
+        PeripheralKind.Headset => "耳机",
+        _ => "未知",
+    };
 
     /// <summary>
     /// 耳机：从音频端点推。名字里带「耳机 / 耳麦 / Headphone / Headset」的端点就是耳机，
@@ -251,7 +329,8 @@ public static class PeripheralAnalyzer
             connection,
             battery,
             battery is null ? null : "蓝牙电量上报",
-            endpoint.InstanceId);
+            endpoint.InstanceId,
+            $"音频端点「{name}」名称含耳机字样");
     }
 
     /// <summary>

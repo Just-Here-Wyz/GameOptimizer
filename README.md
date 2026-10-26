@@ -67,6 +67,8 @@ pwsh -File installer\build-installer.ps1        # 版本号取自 Directory.Buil
 ![后台进程保护](docs/images/background.png)
 
 **外设**：鼠标、键盘、耳机三类的型号、连接方式与电量。有线自动识别为「有线 · 无需充电」。
+类型按 HID 用途页与用法判定，卡片上会写出**分类依据**与设备实例 ID；
+一台设备同时提供键盘与鼠标接口时按接口分别展示，判不出来的显示「未知设备」，不硬塞进某一类。
 
 ![外设](docs/images/peripherals.png)
 

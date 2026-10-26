@@ -118,9 +118,88 @@ public class PeripheralAnalyzerTests
         vxe[0].Kind.Should().Be(PeripheralKind.Mouse);
     }
 
-    [Fact]
-    public void 同一只键盘的多个集合应合并成一台()
+    /// <summary>复合接收器：一个容器里既有键盘接口又有鼠标接口，且读不到自报型号。</summary>
+    private static List<PeripheralNode> UnnamedComboDongle()
     {
+        var container = Guid.Parse("0bda1100-1111-2222-3333-444455556666");
+
+        return
+        [
+            Node(@"HID\VID_0BDA&PID_1100&MI_00\7&1A2B3C&0&0000", "Keyboard",
+                busReported: "USB Receiver", container: container,
+                hardwareIds: ["HID\\VID_0BDA&PID_1100&MI_00", "HID_DEVICE_UP:0001_U:0006", "HID_DEVICE_SYSTEM_KEYBOARD"]),
+            Node(@"HID\VID_0BDA&PID_1100&MI_01\7&1A2B3C&0&0001", "Mouse",
+                busReported: "USB Receiver", container: container,
+                hardwareIds: ["HID\\VID_0BDA&PID_1100&MI_01", "HID_DEVICE_UP:0001_U:0002", "HID_DEVICE_SYSTEM_MOUSE"]),
+        ];
+    }
+
+    [Fact]
+    public void 判不出主功能的复合设备应按接口分别展示_不能整台算成鼠标()
+    {
+        // 修复前：名字里看不出类型 → 默认鼠标，键盘直接消失。
+        // 现在改为按接口各出一张卡，两张都标为复合设备。
+        var input = PeripheralAnalyzer.Build(UnnamedComboDongle())
+            .Where(d => d.Kind is PeripheralKind.Mouse or PeripheralKind.Keyboard)
+            .ToList();
+
+        input.Should().HaveCount(2);
+        input.Should().Contain(d => d.Kind == PeripheralKind.Keyboard);
+        input.Should().Contain(d => d.Kind == PeripheralKind.Mouse);
+        input.Should().OnlyContain(d => d.IsComposite);
+        input.Should().OnlyContain(d => d.Basis.Contains("复合设备"));
+    }
+
+    [Fact]
+    public void 键盘带指针接口时不能被整台变成鼠标()
+    {
+        // 游戏键盘多一个指针/宏集合很常见，自报型号说得很清楚是 Keyboard
+        var container = Guid.Parse("046dc338-0000-0000-0000-000000000000");
+        var nodes = new List<PeripheralNode>
+        {
+            Node(@"HID\VID_046D&PID_C338&MI_00\7&46BA748&0&0000", "Keyboard",
+                hidProduct: "Gaming Keyboard G610", manufacturer: "Logitech", container: container,
+                hardwareIds: ["HID_DEVICE_UP:0001_U:0006"]),
+            Node(@"HID\VID_046D&PID_C338&MI_02\7&46BA749&0&0000", "Mouse",
+                hidProduct: "Gaming Keyboard G610", manufacturer: "Logitech", container: container,
+                hardwareIds: ["HID_DEVICE_UP:0001_U:0002"]),
+        };
+
+        var devices = PeripheralAnalyzer.Build(nodes).Where(d => d.Kind != PeripheralKind.Headset).ToList();
+
+        devices.Should().HaveCount(1);
+        devices[0].Kind.Should().Be(PeripheralKind.Keyboard);
+        devices[0].IsComposite.Should().BeTrue();
+    }
+
+    [Fact]
+    public void 每台设备的类型结论都应带分类依据()
+    {
+        // 依据是给用户复核用的：只说「这是键盘」而说不出凭什么，分类错了没人查得到
+        var devices = PeripheralAnalyzer.Build(RealMachineNodes());
+
+        devices.Should().OnlyContain(d => d.Basis.Length > 0);
+        var keyboard = devices.Single(d => d.Kind == PeripheralKind.Keyboard && d.Manufacturer == "Logitech");
+        keyboard.Basis.Should().Contain("设备类 Keyboard");
+    }
+
+    [Fact]
+    public void 只剩描述文字的设备应显示为未知设备而不是被丢掉()
+    {
+        // 属性读取失败（硬件 ID 与类名都空）时不能凭名字里的 Keyboard 冒充键盘
+        var nodes = new List<PeripheralNode>
+        {
+            Node(@"HID\VID_1234&PID_5678\7&1&0&0000", "", friendly: "HID Keyboard Device"),
+        };
+
+        var device = PeripheralAnalyzer.Build(nodes).Single(d => d.Kind == PeripheralKind.Unknown);
+
+        device.KindText.Should().Be("未知设备");
+        device.Basis.Should().Contain("描述文字");
+    }
+
+    [Fact]
+    public void 同一只键盘的多个集合应合并成一台()    {
         var devices = PeripheralAnalyzer.Build(RealMachineNodes());
         var logitech = devices.Where(d => d.Model.Contains("G610", StringComparison.Ordinal)).ToList();
 

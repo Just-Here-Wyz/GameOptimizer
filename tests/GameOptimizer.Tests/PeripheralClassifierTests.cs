@@ -23,12 +23,12 @@ public class PeripheralClassifierTests
     public void 设备树类名为鼠标时应识别为鼠标()
     {
         // 实测 3554:F58A 的鼠标接口 HardwareIds 读得到，但类名更直接可靠
-        PeripheralClassifier.FromHidHardwareIds([], "Mouse").Should().Be(PeripheralKind.Mouse);
+        PeripheralClassifier.ClassifyInterface([], "Mouse")!.Single.Should().Be(PeripheralKind.Mouse);
     }
 
     [Fact]
     public void 设备树类名为键盘时应识别为键盘()
-        => PeripheralClassifier.FromHidHardwareIds([], "Keyboard").Should().Be(PeripheralKind.Keyboard);
+        => PeripheralClassifier.ClassifyInterface([], "Keyboard")!.Single.Should().Be(PeripheralKind.Keyboard);
 
     [Fact]
     public void 触摸板的硬件ID带数字化仪用途页_必须排除()
@@ -36,17 +36,118 @@ public class PeripheralClassifierTests
         // 实测 HID\FTCS100 的硬件 ID 里确实带 UP:0001_U:0002（Windows 归为 Mouse 类），
         // 只按类名判会把它当成一只鼠标，笔记本上就凭空多出一只
         string[] ids = ["HID\\FTCS100&Col01", "HID\\VID_2808&UP:0001_U:0002", "HID_DEVICE_UP:0001_U:0002"];
-        PeripheralClassifier.FromHidHardwareIds(ids).Should().Be(PeripheralKind.Mouse); // 用途页本身还是鼠标
+        PeripheralClassifier.ClassifyInterface(ids)!.Single.Should().Be(PeripheralKind.Mouse); // 用途页本身还是鼠标
 
         string[] digitizer = ["HID\\VID_2808&UP:000D_U:0004", "HID_DEVICE_UP:000D_U:0004"];
-        PeripheralClassifier.FromHidHardwareIds(digitizer).Should().BeNull();
+        PeripheralClassifier.ClassifyInterface(digitizer).Should().BeNull();
+    }
+
+    [Fact]
+    public void 数字化仪用途页优先于设备类_触摸板不能被类名带走()
+    {
+        // 触摸板在 Windows 里就是 Mouse 类，用途页 0x0D 才是真信号
+        string[] ids = ["HID\\VID_2808&UP:000D_U:0002", "HID_DEVICE_UP:000D_U:0002"];
+
+        PeripheralClassifier.ClassifyInterface(ids, "Mouse", "HID-compliant mouse").Should().BeNull();
     }
 
     [Fact]
     public void 游戏手柄不应被当成鼠标或键盘()
     {
         string[] ids = ["HID\\VID_054C&UP:0005_U:0001"];
-        PeripheralClassifier.FromHidHardwareIds(ids).Should().BeNull();
+        PeripheralClassifier.ClassifyInterface(ids).Should().BeNull();
+    }
+
+    [Fact]
+    public void 通用桌面的摇杆用法不能被当成鼠标()
+    {
+        // 0x04 是摇杆、0x08 是多轴控制器，不是鼠标。
+        // 修复前把 UP:0001_U:0004 直接映射成鼠标，摇杆类设备会伪装成一只鼠标。
+        string[] joystick = ["HID\\VID_044F&UP:0001_U:0004", "HID_DEVICE_UP:0001_U:0004"];
+        PeripheralClassifier.ClassifyInterface(joystick).Should().BeNull();
+
+        string[] multiAxis = ["HID_DEVICE_UP:0001_U:0008"];
+        PeripheralClassifier.ClassifyInterface(multiAxis).Should().BeNull();
+    }
+
+    [Fact]
+    public void 用途页与用法必须成对解释_厂商页里的同名用法不算键盘()
+    {
+        // 0x0006 只在通用桌面页（0x01）里是键盘；厂商页 0xFF00 里的 0x0006 什么都不能说明
+        string[] vendor = ["HID\\VID_3554&UP:FF00_U:0006", "HID_DEVICE_UP:FF00_U:0006"];
+        PeripheralClassifier.ClassifyInterface(vendor, "HIDClass").Should().BeNull();
+
+        // 用途页正确时才认
+        string[] real = ["HID\\VID_046D&UP:0001_U:0006", "HID_DEVICE_UP:0001_U:0006"];
+        PeripheralClassifier.ClassifyInterface(real, "HIDClass")!.Single.Should().Be(PeripheralKind.Keyboard);
+    }
+
+    [Fact]
+    public void 同一节点同时报告键盘与鼠标用途时应交回两类而不是替它拍板()
+    {
+        // 复合集合：分类器不下结论，由分析层决定是合并展示还是按接口拆开
+        string[] ids = ["HID_DEVICE_UP:0001_U:0002", "HID_DEVICE_UP:0001_U:0006"];
+        var iface = PeripheralClassifier.ClassifyInterface(ids, "HIDClass")!;
+
+        iface.Single.Should().BeNull();
+        iface.Has(PeripheralKind.Keyboard).Should().BeTrue();
+        iface.Has(PeripheralKind.Mouse).Should().BeTrue();
+    }
+
+    [Fact]
+    public void 键盘节点的用途页判定不能被鼠标优先规则抢走()
+    {
+        // 早期实现里鼠标判定写在键盘前面，一个节点只要带指针集合就整台变成鼠标
+        string[] ids = ["HID\\VID_046D&PID_C338&MI_00", "HID_DEVICE_UP:0001_U:0006", "HID_DEVICE_SYSTEM_KEYBOARD"];
+        PeripheralClassifier.ClassifyInterface(ids, "Keyboard")!.Single.Should().Be(PeripheralKind.Keyboard);
+    }
+
+    [Fact]
+    public void 类名与用途冲突时以用途为准并在依据里写明()
+    {
+        // 设备类写 Keyboard、用途页却是鼠标：以用途为准，但不能假装没有矛盾
+        string[] ids = ["HID_DEVICE_UP:0001_U:0002"];
+        var iface = PeripheralClassifier.ClassifyInterface(ids, "Keyboard")!;
+
+        iface.Single.Should().Be(PeripheralKind.Mouse);
+        iface.Basis.Should().Contain("以用途为准");
+    }
+
+    [Fact]
+    public void 用途页缺失时HID系统集合ID也能定性()
+    {
+        // HID_DEVICE_SYSTEM_KEYBOARD 是 Windows 给启动键盘集合打的标识，属于结构化信息，
+        // 不是产品名 —— 没有用途页时靠它比靠描述文字可靠
+        string[] ids = ["HID\\VID_1234&PID_5678", "HID_DEVICE_SYSTEM_KEYBOARD", "HID_DEVICE"];
+        PeripheralClassifier.ClassifyInterface(ids)!.Single.Should().Be(PeripheralKind.Keyboard);
+
+        string[] mouse = ["HID_DEVICE_SYSTEM_MOUSE"];
+        PeripheralClassifier.ClassifyInterface(mouse)!.Single.Should().Be(PeripheralKind.Mouse);
+    }
+
+    [Fact]
+    public void 用途页缺失时系统集合优先于设备类()
+    {
+        // 类名被驱动写错（Mouse）时不跟着错：系统集合说键盘就是键盘
+        string[] ids = ["HID_DEVICE_SYSTEM_KEYBOARD"];
+        PeripheralClassifier.ClassifyInterface(ids, "Mouse")!.Single.Should().Be(PeripheralKind.Keyboard);
+    }
+
+    [Fact]
+    public void 只有描述文字时应降级为未知设备并写明依据()
+    {
+        // 硬件 ID 与类名都读不到时，名字里的 Keyboard 只能当线索，不能确认类型
+        var iface = PeripheralClassifier.ClassifyInterface([], "", "HID Keyboard Device")!;
+
+        iface.Single.Should().Be(PeripheralKind.Unknown);
+        iface.Basis.Should().Contain("描述文字");
+    }
+
+    [Fact]
+    public void 用途页结论应带可复核的依据()
+    {
+        string[] ids = ["HID_DEVICE_UP:0001_U:0006"];
+        PeripheralClassifier.ClassifyInterface(ids)!.Basis.Should().Contain("用途页 0x01").And.Contain("0x06");
     }
 
     [Fact]
@@ -55,7 +156,7 @@ public class PeripheralClassifierTests
         // 实测 HID\VID_046D&PID_C338&MI_01&COL02 是键盘的消费类集合，
         // 早期版本按 0x0C 用途页判成耳机，界面上就多出一台「耳机 G610」
         string[] ids = ["HID\\VID_046D&UP:000C_U:0001"];
-        PeripheralClassifier.FromHidHardwareIds(ids).Should().BeNull();
+        PeripheralClassifier.ClassifyInterface(ids).Should().BeNull();
     }
 
     [Theory]
