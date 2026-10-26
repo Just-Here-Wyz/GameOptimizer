@@ -23,8 +23,10 @@
     **不猜的内容**（需要人工补）：
         docs/06-变更记录.md  本次改动的小节标题（写清楚用户能看到什么）
         docs/README.md       版本历史表补一行
-        README.md            下载链接与附件表 —— 只有真的打包上传后才换，
-                             在那之前链接必须继续指向最近发布的那一版
+        README.md            下载链接、附件表、**以及「最近发布 vX.Y.Z」那一行**
+                             —— 只有真的在 GitHub 上建好 Release 并上传产物后才换。
+                             脚本不碰它：Git 看不出某个版本有没有建成 Release，
+                             tag 推上去了 ≠ 有安装包可下，猜错就会写成死链。
 
 .PARAMETER Kind
     feature（默认）| fix | major。
@@ -117,20 +119,11 @@ if ($newVersion -eq $oldVersion) {
     return
 }
 
-# 最近发布的那一版：以 Git tag 为准（tag 存在 = 真的发布过）
-$latestTag = ''
-try {
-    $latestTag = (git -C $repoRoot tag --list 'v*' --sort=-v:refname | Select-Object -First 1)
-}
-catch {
-    $latestTag = ''
-}
-if ([string]::IsNullOrWhiteSpace($latestTag)) { $latestTag = 'v' + $oldVersion }
-
+# 「最近发布」不在这里推导：Git 看不出某个版本有没有在 GitHub 上建过 Release
+# （tag 推上去 ≠ 有可下载的安装包）。README 里那一行跟着 Release 走，发版时人手改。
 Write-Host ''
 Write-Host "版本号：$oldVersion → $newVersion" -ForegroundColor Cyan
 Write-Host "  规则：$bumpNote"
-Write-Host "  最近发布（Git tag）：$latestTag"
 Write-Host ''
 
 $oldEsc = [regex]::Escape($oldVersion)
@@ -180,8 +173,7 @@ $targets = @(
     @{ Path = 'docs\03-版本规则.md'; Pattern = '\*\*v[\d.]+\*\* ——'; Replace = "**v$newVersion** ——" },
     @{ Path = 'docs\README.md'; Pattern = '> 当前版本：\*\*v[\d.]+\*\*'; Replace = "> 当前版本：**v$newVersion**" },
     @{ Path = 'README.md'; Pattern = '> \*\*v[\d.]+\*\* ｜'; Replace = "> **v$newVersion** ｜" },
-    @{ Path = 'README.md'; Pattern = '源码 \*\*v[\d.]+\*\*'; Replace = "源码 **v$newVersion**" },
-    @{ Path = 'README.md'; Pattern = '最近发布 v[\d.]+'; Replace = "最近发布 $latestTag" }
+    @{ Path = 'README.md'; Pattern = '源码 \*\*v[\d.]+\*\*'; Replace = "源码 **v$newVersion**" }
 )
 
 foreach ($target in $targets) {
@@ -198,7 +190,8 @@ foreach ($target in $targets) {
     $rx = New-Object -TypeName System.Text.RegularExpressions.Regex -ArgumentList $target.Pattern
 
     # 先判「认不认得出」再判「要不要写」：
-    # 两件事分开，否则「匹配上了但值没变」（例如最近发布的那版刚好就是当前版本）会被误报成漏改
+    # 两件事分开，否则「匹配上了但结果没变」会被误报成漏改——那说明的是文件本来就对，
+    # 而不是脚本没找到落点，报警会把真正的问题淹掉。
     if (-not $rx.IsMatch($original)) {
         Write-Warning "没匹配到：$($target.Path)  ←  $($target.Pattern)"
         continue
@@ -222,8 +215,10 @@ else {
 }
 
 Write-Host ''
-Write-Host '还需要人工补两处（脚本不猜内容）：' -ForegroundColor Yellow
+Write-Host '还需要人工补三处（脚本不猜内容）：' -ForegroundColor Yellow
 Write-Host "  1. docs/06-变更记录.md  本次改动的小节标题写成「## v$newVersion — …」"
 Write-Host '  2. docs/README.md       版本历史表补一行'
+Write-Host "  3. README.md            下载链接 / 附件表 / 「最近发布 vX.Y.Z」"
+Write-Host '                          —— 等 GitHub Release 建好、产物传上去之后再改'
 Write-Host ''
-Write-Host "下一步：dotnet test（VersionConsistencyTests 会核对版本）→ git commit → 打包 → tag v$newVersion"
+Write-Host "下一步：dotnet test（VersionConsistencyTests 会核对版本）→ git commit → 打包 → tag v$newVersion → 建 Release"
