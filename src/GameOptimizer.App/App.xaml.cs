@@ -165,17 +165,23 @@ public partial class App : Application
         if (count > 0) items.Add($"{count} 个进程");
         var what = items.Count > 0 ? string.Join("和", items) : "上次的改动";
 
+        // 没有电源计划、只剩进程 = 「上次关闭游戏模式后被跳过/取消的恢复」，
+        // 不是异常退出。措辞必须分清，否则用户会以为程序崩过。
+        var question = planMention.Length > 0
+            ? $"上次程序未正常退出，检测到 {what} 未还原，是否现在还原？"
+            : $"上次关闭游戏模式后还有 {count} 个后台进程没有恢复，是否现在恢复？";
+
         var answer = MessageBox.Show(
-            $"上次程序未正常退出，检测到 {what} 未还原，是否现在还原？",
+            question,
             "游戏优化助手 — 恢复",
             MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return; // 保留快照，下次启动再问
 
         // 还原：电源计划走与 PowerPlanAction 相同的 powercfg 通道（含回读验证），
-        // 进程用 GameModeRecovery 按原路径拉起，失败项必须逐条展示。
-        var errors = new GameModeRecovery().Restore(
-            snapshot,
-            PowerPlanAction.RestorePlan);
+        // 进程用 GameModeRecovery 按原路径拉起——它内部会先过一遍恢复资格判定，
+        // 文件已删除、应用商店应用这类目标一律跳过并说明原因，不硬启动。
+        var recovery = new GameModeRecovery();
+        var errors = recovery.Restore(snapshot, PowerPlanAction.RestorePlan);
 
         if (errors.Count > 0)
         {
@@ -185,6 +191,15 @@ public partial class App : Application
                 "游戏优化助手 — 还原未完成",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
+        }
+
+        // 跳过项不算「没还原完」（否则快照永远清不掉），但也要让用户知道哪些没回来
+        if (recovery.Skipped.Count > 0)
+        {
+            MessageBox.Show(
+                "以下项目无法自动恢复，已跳过：\n" + string.Join("\n", recovery.Skipped),
+                "游戏优化助手 — 部分未恢复",
+                MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         store.Clear();

@@ -20,6 +20,28 @@ public interface IGameModeAction
     bool IsActive();
 }
 
+/// <summary>
+/// 能提供「待恢复进程」的动作。
+///
+/// 抽成接口的两个理由：
+/// 1. 控制器不必认识 <see cref="EndProcessAction"/> 就能实现「关闭后先不恢复」；
+/// 2. 测试不必真的结束一个真实进程，也能验证延迟恢复与快照保留的逻辑。
+/// </summary>
+public interface IProcessRestoreSource
+{
+    /// <summary>
+    /// 退出时是否自动按原路径拉起进程。
+    /// false 表示「先只关游戏模式，恢复哪些交给用户在弹窗里选」。
+    /// </summary>
+    bool AutoRestoreOnRevert { get; set; }
+
+    /// <summary>已结束、尚未恢复的进程记录。</summary>
+    IReadOnlyList<RestoredProcess> PendingRestores { get; }
+
+    /// <summary>全部恢复记录（含已恢复 / 已失败），用于统计与上报。</summary>
+    IReadOnlyList<RestoredProcess> Restored { get; }
+}
+
 /// <summary>切换电源计划到高性能。可回滚。</summary>
 public sealed class PowerPlanAction : IGameModeAction
 {
@@ -259,7 +281,7 @@ public sealed class GameDvrAction : IGameModeAction
 /// 界面已经把它们排除在目标之外，这里再拦是为了防止任何调用方绕过界面直接结束受保护进程
 /// （「界面写受保护、实际仍被结束」是本次改造明确要杜绝的事）。
 /// </summary>
-public sealed class EndProcessAction : IGameModeAction
+public sealed class EndProcessAction : IGameModeAction, IProcessRestoreSource
 {
     private readonly List<KilledProcess> _killed = [];
     private readonly List<BlockedProcess> _blocked = [];
@@ -281,7 +303,25 @@ public sealed class EndProcessAction : IGameModeAction
     public IReadOnlyList<string> ProtectedNames => [.. _protected];
 
     public string Name => "关闭后台干扰进程";
-    public string Description => "结束你标记为结束目标的后台程序；勾选保护的一律不动，关闭游戏模式时自动恢复。";
+    public string Description => "结束你标记为结束目标的后台程序；勾选保护的一律不动，关闭游戏模式时由你选择恢复哪些。";
+
+    /// <summary>
+    /// 退出时是否自动按原路径拉起被结束的进程。
+    ///
+    /// 默认 true：托盘退出、崩溃兜底这类没有界面的路径没得选，只能全恢复；
+    /// 走恢复选择弹窗时必须先置 false——<b>先关游戏模式，再由用户决定恢复谁</b>，
+    /// 否则弹窗还没打开，进程就已经全被拉起来了，选择权形同虚设。
+    /// </summary>
+    public bool AutoRestoreOnRevert { get; set; } = true;
+
+    /// <summary>
+    /// 还没<b>成功</b>恢复的进程：既包括还没处理的，也包括处理过但失败 / 未确认的。
+    ///
+    /// 失败项必须留在这里，否则「有程序没回来」这件事在下次启动时就彻底没记录了；
+    /// 重复启动的风险由恢复资格里的「已在运行」判据挡掉。
+    /// </summary>
+    public IReadOnlyList<RestoredProcess> PendingRestores
+        => [.. _restored.Where(r => !r.Launched || r.Failed)];
 
     /// <summary>本动作实际结束掉的进程。</summary>
     public IReadOnlyList<KilledProcess> Killed => _killed;
@@ -423,21 +463,28 @@ public sealed class EndProcessAction : IGameModeAction
     /// <summary>
     /// 退出游戏模式：恢复所有被结束、且可执行文件路径已知的进程。
     /// 恢复失败的进程会被保留在上报列表里，绝不静默假装恢复了。
+    ///
+    /// <see cref="AutoRestoreOnRevert"/> 为 false 时<b>不拉起任何进程</b>，
+    /// 只结束「已激活」状态（清 <c>_killed</c>），恢复记录原样留着，
+    /// 等用户在恢复选择弹窗里挑完再走 <see cref="ProcessRestoreRunner"/>。
     /// </summary>
     public void Revert()
     {
-        foreach (var r in _restored)
+        if (AutoRestoreOnRevert)
         {
-            if (r.Launched) continue;
+            foreach (var r in _restored)
+            {
+                if (r.Launched) continue;
 
-            try
-            {
-                Process.Start(new ProcessStartInfo(r.LaunchPath) { UseShellExecute = true });
-                r.MarkLaunched();
-            }
-            catch (Exception ex)
-            {
-                r.MarkFailed(ex.Message);
+                try
+                {
+                    Process.Start(new ProcessStartInfo(r.LaunchPath) { UseShellExecute = true });
+                    r.MarkLaunched();
+                }
+                catch (Exception ex)
+                {
+                    r.MarkFailed(ex.Message);
+                }
             }
         }
 
@@ -649,7 +696,7 @@ public sealed class GameModeController
         var snapshot = new GameModeSnapshot();
         var power = _applied.OfType<PowerPlanAction>().FirstOrDefault();
         if (power is not null) snapshot.PreviousPowerPlanGuid = power.PreviousGuid;
-        var killer = _applied.OfType<EndProcessAction>().FirstOrDefault();
+        var killer = _applied.OfType<IProcessRestoreSource>().FirstOrDefault();
         if (killer is not null)
         {
             snapshot.Killed = killer.Restored
@@ -665,20 +712,107 @@ public sealed class GameModeController
     /// 退出游戏模式并返回回滚失败项。回滚失败必须让用户看见——
     /// 电源计划没还原却提示"已还原"比不还原更糟。
     /// </summary>
-    public IReadOnlyList<string> ExitWithReport()
+    public IReadOnlyList<string> ExitWithReport() => ExitWithReport(deferProcessRestore: false);
+
+    /// <summary>
+    /// 退出游戏模式。
+    ///
+    /// <paramref name="deferProcessRestore"/> = true 时<b>只还原电源计划等改动，不拉起进程</b>：
+    /// 这样界面可以先弹出「选择需要恢复的后台进程」，用户勾完再按顺序恢复。
+    /// 顺序很关键——如果先恢复再弹窗，选择就变成了「事后追认」，还白启动一遍。
+    ///
+    /// 延迟模式下兜底快照会改写成「只剩没恢复的进程、电源计划置空」：
+    /// 用户取消恢复也<b>不会删除</b>这份记录，下次启动仍能接着还原。
+    /// </summary>
+    public IReadOnlyList<string> ExitWithReport(bool deferProcessRestore)
     {
         var errors = new List<string>();
-        for (var i = _applied.Count - 1; i >= 0; i--)
-        {
-            try { _applied[i].Revert(); }
-            catch (Exception ex) { errors.Add($"{_applied[i].Name} 还原失败：{ex.Message}"); }
-        }
-        _applied.Clear();
-        IsActive = false;
+        var source = _applied.OfType<IProcessRestoreSource>().FirstOrDefault();
+        var previousAutoRestore = source?.AutoRestoreOnRevert ?? true;
 
-        // 有还原失败就保留快照：下次启动继续提示用户处理
-        if (errors.Count == 0 && _stateSaved) ClearStateSnapshot();
+        if (deferProcessRestore && source is not null) source.AutoRestoreOnRevert = false;
+
+        try
+        {
+            for (var i = _applied.Count - 1; i >= 0; i--)
+            {
+                try { _applied[i].Revert(); }
+                catch (Exception ex) { errors.Add($"{_applied[i].Name} 还原失败：{ex.Message}"); }
+            }
+        }
+        finally
+        {
+            // 无论回滚是否顺利，动作实例的自动恢复开关都要复位：
+            // 托盘退出与崩溃兜底仍走「全恢复」，不能被这次关闭带偏
+            if (source is not null) source.AutoRestoreOnRevert = previousAutoRestore;
+
+            _applied.Clear();
+            IsActive = false;
+        }
+
+        if (!deferProcessRestore)
+        {
+            // 有还原失败就保留快照：下次启动继续提示用户处理
+            if (errors.Count == 0 && _stateSaved) ClearStateSnapshot();
+            return errors;
+        }
+
+        // 延迟恢复：还原本身成功时，把「还剩哪些没恢复」写进快照；
+        // 还原失败则原样保留原快照（电源计划仍未还原，不能丢掉那条信息）
+        if (errors.Count == 0)
+        {
+            _stateSaved = false;
+            var snapshotError = SyncPendingRestoreSnapshot();
+            if (snapshotError is not null) errors.Add(snapshotError);
+        }
+
         return errors;
+    }
+
+    /// <summary>
+    /// 把「还没恢复的进程」同步进兜底快照；没有剩余就清掉。
+    ///
+    /// 恢复选择弹窗关闭后（恢复完成 / 部分失败 / 用户取消）都要调一次：
+    /// <list type="bullet">
+    /// <item>全部恢复成功 → 快照清空，下次启动不再追问；</item>
+    /// <item>部分失败或用户取消 → 快照只留没恢复的项，选择权交给下次启动。</item>
+    /// </list>
+    ///
+    /// 任何失败都只作为返回值上报，<b>绝不抛出</b>：此时游戏模式已经关干净了，
+    /// 不能因为写不进去一个兜底文件就把已完成的关闭流程判成失败。
+    /// </summary>
+    public string? SyncPendingRestoreSnapshot()
+    {
+        if (_stateStore is null) return null;
+
+        try
+        {
+            var source = _actions.OfType<IProcessRestoreSource>().FirstOrDefault();
+            var pending = source?.PendingRestores ?? [];
+
+            if (pending.Count == 0)
+            {
+                _stateStore.Clear();
+                _stateSaved = false;
+                return null;
+            }
+
+            // 电源计划在这一步之前已经还原，快照里不能再留着旧 GUID，
+            // 否则下次启动会按一份过期计划把用户的电源设置再改一遍
+            var snapshot = new GameModeSnapshot
+            {
+                PreviousPowerPlanGuid = null,
+                Killed = [.. pending.Select(r => new GameModeKilledProcess { Name = r.Name, LaunchPath = r.LaunchPath })],
+            };
+
+            _stateStore.Save(snapshot);
+            _stateSaved = true;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"未恢复进程的兜底记录没写成功（{ex.Message}），下次启动可能不会提示还原";
+        }
     }
 
     /// <summary>干净退出后清除兜底快照；清除失败保留快照（下次启动提示，好过无声丢档）。</summary>

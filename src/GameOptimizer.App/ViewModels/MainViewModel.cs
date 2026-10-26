@@ -44,6 +44,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>快速优化执行器：只做「结束用户确认过的进程」这一件会改系统的事。</summary>
     private readonly CpuQuickOptimizeRunner _cpuOptimize = new();
 
+    /// <summary>
+    /// 恢复队列：逐项启动 + 项间留间隔 + 启动后确认 + 同一时刻只允许一批。
+    /// 一次性拉起十几个应用会同时抢磁盘，界面卡死、启动互相拖慢（v2.4.0 之前就是那样）。
+    /// </summary>
+    private readonly ProcessRestoreRunner _processRestore = new();
+
     /// <summary>已安装游戏的 exe 主名，用于把游戏本体排除在「可结束」候选之外。</summary>
     private IReadOnlySet<string> _gameStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -933,6 +939,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>打开管理浮窗（由 MainWindow 订阅，VM 不直接创建 Window）。</summary>
     public event EventHandler? OpenBackgroundManagerRequested;
 
+    /// <summary>
+    /// 关闭游戏模式后请求打开「选择需要恢复的后台进程」弹窗。
+    /// 同样由 MainWindow 订阅并 <c>ShowDialog</c>：ViewModel 里不出现 Window 类型，
+    /// 离屏渲染等无界面场景就不会误弹窗。
+    /// </summary>
+    public event EventHandler<ProcessRestoreRequest>? RestoreSelectionRequested;
+
     /// <summary>当前真正会被结束的进程名（与传给结束动作的名单同源）。</summary>
     private IReadOnlyList<string> CurrentEndTargets()
         => BackgroundKillPlan.Resolve(BackgroundProcesses.Select(e => e.ToFacts(_gameStems)));
@@ -1675,6 +1688,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// 结束白名单进程时每个还要等 5 秒确认退出，内存清理还要遍历全机进程。
     /// 同步跑会把 UI 线程按在地上，按钮连按下的视觉反馈都画不出来——
     /// 用户以为没点上，恢复后队列里的点击会连开带关，状态彻底乱掉。
+    ///
+    /// 关闭是两步（v2.4.1）：先把游戏模式关干净（电源计划等），再弹窗让用户挑恢复哪些进程。
+    /// 顺序不能反——先恢复再问，选择权就形同虚设。
     /// </summary>
     private async void ToggleGameMode()
     {
@@ -1692,11 +1708,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var outcome = await Task.Run(() => entering ? EnterGameMode() : ExitGameMode());
+            if (entering)
+            {
+                var outcome = await Task.Run(() => EnterGameMode());
+                IsGameModeOn = outcome.Active;
+                GameModeStatus = outcome.Status;
+                GameModePhase = outcome.Phase;
+            }
+            else
+            {
+                // 关闭期间 IsGameModeToggling 保持 true：主界面按钮禁用，
+                // 恢复弹窗也是模态的，不可能「关到一半又开一遍」
+                var exit = await Task.Run(() => ExitGameMode());
 
-            IsGameModeOn = outcome.Active;
-            GameModeStatus = outcome.Status;
-            GameModePhase = outcome.Phase;
+                IsGameModeOn = false;
+                GameModeStatus = exit.Status;
+                GameModePhase = exit.Phase;
+
+                if (exit.CanOfferRestore) await OfferProcessRestoreAsync(exit);
+            }
         }
         catch (Exception ex)
         {
@@ -1717,6 +1747,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>一次切换的最终结果，回 UI 线程再灌进绑定属性。</summary>
     private sealed record GameModeOutcome(bool Active, string Status, GameModePhase Phase);
+
+    /// <summary>
+    /// 关闭游戏模式的结果。
+    ///
+    /// <see cref="Candidates"/> 是「关闭前被结束、现在可能恢复」的完整清单（含被跳过的项及原因）；
+    /// <see cref="CanOfferRestore"/> 只有存在真正可恢复项时才为 true——
+    /// 一个都恢复不了就别弹一个全是灰条的窗口。
+    /// </summary>
+    private sealed record GameModeExitOutcome(
+        string Status,
+        GameModePhase Phase,
+        IReadOnlyList<ProcessRestoreCandidate> Candidates,
+        bool CanOfferRestore);
 
     /// <summary>在后台线程执行开启，返回值只含纯数据，不碰 UI。</summary>
     private GameModeOutcome EnterGameMode()
@@ -1741,37 +1784,105 @@ public sealed class MainViewModel : INotifyPropertyChanged
             detail += "；" + string.Join("；", _gameMode.Warnings);
 
         return new(_gameMode.IsActive,
-            $"游戏模式：已开启{detail}；关闭时自动恢复这些进程",
+            $"游戏模式：已开启{detail}；关闭时由你选择恢复哪些进程",
             GameModePhase.On);
     }
 
-    /// <summary>在后台线程执行关闭：按原路径恢复被结束的进程，失败项逐条上报。</summary>
-    private GameModeOutcome ExitGameMode()
+    /// <summary>在后台线程执行关闭（不恢复进程），失败项逐条上报。</summary>
+    private GameModeExitOutcome ExitGameMode()
     {
         lock (_gameModeGate) return ExitGameModeCore();
     }
 
-    private GameModeOutcome ExitGameModeCore()
+    private GameModeExitOutcome ExitGameModeCore()
     {
-        var errors = _gameMode.ExitWithReport().ToList();
+        // 第一步：只关游戏模式（电源计划等），进程留给用户在弹窗里挑
+        var errors = _gameMode.ExitWithReport(deferProcessRestore: true).ToList();
 
-        var restored = 0;
-        var action = _gameMode.Actions.OfType<EndProcessAction>().FirstOrDefault();
-        if (action is not null)
-        {
-            restored = action.RestoredCount;
-            errors.AddRange(action.FailedRestores.Select(r =>
-                $"{ProcessDisplayNames.Resolve(r.Name)}恢复失败：{r.Error}"));
-        }
+        var source = _gameMode.Actions.OfType<IProcessRestoreSource>().FirstOrDefault();
+        var pending = source?.PendingRestores ?? [];
 
         if (errors.Count > 0)
-            return new(false, "⚠ 游戏模式已关闭，但有项未还原：" + string.Join("；", errors), GameModePhase.Failed);
+        {
+            // 回滚没走完 = 状态不明，这时不许继续启动进程（会把半套状态搅得更乱）。
+            // 首页只留一句摘要，逐条原因进日志文件，不刷一屏红字。
+            foreach (var error in errors) ProcessRestoreLog.Write("[关闭] " + error);
 
-        return new(false,
-            restored > 0
-                ? $"游戏模式：已关闭，已恢复 {restored} 个进程"
-                : "游戏模式：已关闭，改动已还原",
-            GameModePhase.Idle);
+            return new(
+                $"⚠ 游戏模式已关闭，但有 {errors.Count} 项未还原（原因已写入日志）",
+                GameModePhase.Failed,
+                [],
+                CanOfferRestore: false);
+        }
+
+        // 第二步：把快照记录翻译成可勾选的候选（文件是否还在、是否系统组件、是否已在运行…）
+        var candidates = ProcessRestorePlanner.Build(pending);
+        var eligible = candidates.Count(c => c.Eligible);
+
+        if (eligible == 0)
+        {
+            foreach (var skipped in candidates.Where(c => !c.Eligible))
+                ProcessRestoreLog.Write($"[跳过] {skipped.ExecutableName} · {skipped.Reason}");
+
+            var status = candidates.Count == 0
+                ? "游戏模式：已关闭，没有需要恢复的后台进程"
+                : $"游戏模式：已关闭，{candidates.Count} 项后台进程无法自动恢复";
+
+            // 空列表不弹空白窗口，走首页状态行告知；游戏模式本身关成功了，不必标红
+            return new(status, GameModePhase.Idle, [], false);
+        }
+
+        return new(
+            $"游戏模式：已关闭，{eligible} 项后台进程等待你选择恢复",
+            GameModePhase.Idle,
+            candidates,
+            CanOfferRestore: true);
+    }
+
+    /// <summary>
+    /// 弹出恢复选择窗口，并按用户的选择恢复。
+    ///
+    /// 这里只负责「弹窗 → 等结果 → 写摘要 → 同步兜底快照」；
+    /// 勾选状态在 Core 的 <see cref="ProcessRestoreSelection"/>，
+    /// 顺序队列、启动间隔、防重复与启动后校验在 <see cref="ProcessRestoreRunner"/>。
+    /// </summary>
+    private async Task OfferProcessRestoreAsync(GameModeExitOutcome exit)
+    {
+        var viewModel = new ProcessRestoreViewModel(exit.Candidates, _processRestore);
+
+        // 没有界面（离屏渲染 / 窗口已销毁）时不弹窗，也不能偷偷把进程全恢复
+        if (RestoreSelectionRequested is null)
+        {
+            GameModeStatus = "游戏模式：已关闭，未恢复后台进程（界面不可用，恢复记录已保留）";
+            GameModePhase = GameModePhase.Idle;
+            return;
+        }
+
+        var request = new ProcessRestoreRequest(viewModel);
+        RestoreSelectionRequested.Invoke(this, request);
+        var restored = await request.Completion;
+
+        var report = viewModel.Report;
+        if (report is null)
+        {
+            // 用户取消（或直接关窗）：一项都没启动，游戏模式也不会被重新打开
+            var count = viewModel.Selection.EligibleCount;
+            GameModeStatus = restored
+                ? "游戏模式：已关闭（恢复结果未知，详见日志）"
+                : $"游戏模式：已关闭，未恢复后台进程（{count} 项留在记录里，下次启动仍可处理）";
+            GameModePhase = GameModePhase.Idle;
+        }
+        else
+        {
+            // 主界面只留这一句摘要（与弹窗同一口径），明细在弹窗与日志文件里
+            GameModeStatus = $"游戏模式已关闭，{report.SummaryAgainst(exit.Candidates.Count)}";
+            GameModePhase = report.FailedCount > 0 ? GameModePhase.Failed : GameModePhase.Idle;
+        }
+
+        // 快照只留「还没恢复的」：全部成功就清掉；取消或部分失败则保留，下次启动接着还原。
+        // 写失败只作为提醒追加一句，不能把已完成的关闭流程判成失败。
+        var snapshotError = await Task.Run(() => _gameMode.SyncPendingRestoreSnapshot());
+        if (snapshotError is not null) GameModeStatus += "；" + snapshotError;
     }
 
     /// <summary>
@@ -1824,7 +1935,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
 
                 if (errors.Count > 0)
-                    GameModeStatus = "⚠ 还原未完成：" + string.Join("；", errors);
+                {
+                    // 退出路径也要留明细，但不把整串堆栈写进状态行
+                    foreach (var error in errors) ProcessRestoreLog.Write("[退出] " + error);
+                    GameModeStatus = $"⚠ 还原未完成：{errors.Count} 项（原因已写入日志）";
+                }
             }
         }
     }

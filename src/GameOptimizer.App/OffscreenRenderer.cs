@@ -19,7 +19,7 @@ using System.Windows.Media.Imaging;
 /// 再渲染那个 Border。
 ///
 /// 用法：<c>GameOptimizer.App.dll --render &lt;输出目录&gt; [页面名,...]</c>
-/// 页面名可选 home / peripherals / download / settings / cpu / background，缺省渲染全部。
+/// 页面名可选 home / peripherals / download / settings / cpu / background / restore，缺省渲染全部。
 ///
 /// 截图会进 README（公开仓库），所以渲染全程按「演示状态」跑：
 /// 提权状态按已提权处理、路径里的用户目录脱敏、下载目录用中性值。
@@ -91,11 +91,99 @@ internal static class OffscreenRenderer
             written.Add(path);
         }
 
+        // 恢复选择弹窗（v2.4.1）：同样是独立窗口
+        if (wanted is null || wanted.Contains(RestorePageName))
+        {
+            var path = Path.Combine(outputDirectory, $"page-{RestorePageName}.png");
+            RenderRestoreDialog(path);
+            written.Add(path);
+        }
+
         return string.Join(Environment.NewLine, written);
     }
 
     /// <summary>浮窗的页面名（--render 的过滤参数用它）。</summary>
     private const string BackgroundPageName = "background";
+
+    /// <summary>恢复选择弹窗的页面名。</summary>
+    private const string RestorePageName = "restore";
+
+    /// <summary>
+    /// 渲染「游戏模式已关闭 — 选择需要恢复的后台进程」弹窗，并额外拍一张「恢复完成」的样子。
+    /// 演示数据全部在内存里构造：不读真实快照、不碰任何进程；
+    /// 启动器与「是否在运行」都换成假实现，结果状态不是真跑出来的，只为验证排版。
+    /// </summary>
+    private static void RenderRestoreDialog(string outputPath)
+    {
+        Trace("start restore");
+
+        var runner = new GameOptimizer.Core.GameMode.ProcessRestoreRunner(
+            startProcess: _ => GameOptimizer.Core.GameMode.ProcessLaunchResult.Ok,
+            isProcessRunning: _ => true,
+            interval: TimeSpan.FromMilliseconds(1),
+            delay: (_, _) => Task.CompletedTask,
+            verifyDelay: (_, _) => Task.CompletedTask);
+
+        RenderRestoreWindow(
+            new GameOptimizer.App.ViewModels.ProcessRestoreViewModel(CreateRestoreCandidates(), runner),
+            outputPath);
+        Trace("restore shot saved");
+
+        // 结果区（摘要 + 逐项明细）只有跑完才出现，单独拍一张验证排版
+        var finished = new GameOptimizer.App.ViewModels.ProcessRestoreViewModel(CreateRestoreCandidates(), runner);
+        _ = finished.RestoreAsync();
+        PumpDispatcher();
+
+        var donePath = Path.Combine(Path.GetDirectoryName(outputPath)!, "page-restore-done.png");
+        RenderRestoreWindow(finished, donePath);
+        Trace("restore done shot saved");
+    }
+
+    private static void RenderRestoreWindow(
+        GameOptimizer.App.ViewModels.ProcessRestoreViewModel viewModel, string outputPath)
+    {
+        var window = new GameOptimizer.App.Views.ProcessRestoreWindow { DataContext = viewModel };
+
+        var content = (UIElement)window.Content;
+        window.Content = null;
+
+        RenderContent(content, viewModel, 780, 640, outputPath);
+    }
+
+    /// <summary>
+    /// 弹窗截图用的候选：可恢复与跳过各来几条，让「资格与原因」这一列也有内容。
+    /// exe 路径只用于取图标与版本信息，指向系统目录里一定存在的程序。
+    /// </summary>
+    private static IReadOnlyList<GameOptimizer.Core.GameMode.ProcessRestoreCandidate> CreateRestoreCandidates()
+    {
+        static string Exe(string name) => Path.Combine(Environment.SystemDirectory, name);
+
+        (string Process, string App, string File, string? Publisher, GameOptimizer.Core.GameMode.RestoreSkipKind Skip, string Reason)[] demo =
+        [
+            ("chrome", "Chrome 浏览器", "chrome.exe", "Google LLC", GameOptimizer.Core.GameMode.RestoreSkipKind.None,
+                GameOptimizer.Core.GameMode.ProcessRestorePlanner.RestorableReason),
+            ("cloudmusic", "网易云音乐", "cloudmusic.exe", "NetEase", GameOptimizer.Core.GameMode.RestoreSkipKind.None,
+                GameOptimizer.Core.GameMode.ProcessRestorePlanner.RestorableReason),
+            ("kugou", "酷狗音乐", "kugou.exe", "KuGou", GameOptimizer.Core.GameMode.RestoreSkipKind.None,
+                GameOptimizer.Core.GameMode.ProcessRestorePlanner.RestorableReason),
+            ("wallpaper64", "壁纸引擎 Wallpaper Engine", "wallpaper64.exe", null, GameOptimizer.Core.GameMode.RestoreSkipKind.None,
+                GameOptimizer.Core.GameMode.ProcessRestorePlanner.RestorableReason),
+            ("WeChat", "微信", "WeChat.exe", "Tencent", GameOptimizer.Core.GameMode.RestoreSkipKind.None,
+                GameOptimizer.Core.GameMode.ProcessRestorePlanner.RestorableReason),
+            ("ghost", "未知应用", "ghost.exe", null, GameOptimizer.Core.GameMode.RestoreSkipKind.MissingFile,
+                "可执行文件已不存在（可能已卸载或移动）"),
+            ("StoreApp", "应用商店应用", "StoreApp.exe", null, GameOptimizer.Core.GameMode.RestoreSkipKind.PackagedApp,
+                "应用商店应用（WindowsApps），不能直接启动包内 exe"),
+        ];
+
+        return
+        [
+            .. demo.Select(d => new GameOptimizer.Core.GameMode.ProcessRestoreCandidate(
+                new GameOptimizer.Core.GameMode.RestoredProcess(d.Process, Exe(d.File)),
+                d.Process, d.App, d.File, d.Publisher, Description: null,
+                LaunchPath: Exe(d.File), SkipKind: d.Skip, Reason: d.Reason))
+        ];
+    }
 
     /// <summary>
     /// 渲染独立浮窗。窗口本身不 Show —— 只把它的内容摘出来排版，
@@ -352,6 +440,11 @@ internal static class OffscreenRenderer
     private static void EnterScreenshotMode()
     {
         GameOptimizer.App.ViewModels.MainViewModel.ScreenshotMode = true;
+
+        // 渲染不该往使用者真实的恢复日志里写字：路径改到临时目录
+        GameOptimizer.Core.GameMode.ProcessRestoreLog.FilePath =
+            Path.Combine(Path.GetTempPath(), "go-render-restore-log.txt");
+
         Trace("screenshot mode on, profile=" + PathRedactor.Redact(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
     }

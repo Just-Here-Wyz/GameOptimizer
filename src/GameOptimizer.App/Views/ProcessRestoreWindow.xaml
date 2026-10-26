@@ -1,0 +1,282 @@
+<Window x:Class="GameOptimizer.App.Views.ProcessRestoreWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:GameOptimizer.App.Views"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="游戏模式已关闭" Height="640" Width="780"
+        Icon="/app.ico"
+        MinHeight="420" MinWidth="640"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#FF141519"
+        FontFamily="Microsoft YaHei UI"
+        TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True">
+
+    <!--
+      进程恢复选择弹窗（v2.4.1）。
+      沿用项目里无系统白框的做法（WindowStyle=None + WindowChrome），
+      不用 AllowsTransparency：它会关掉硬件加速，深色界面上的小字会发虚。
+      尺寸给了最小宽高 + 可缩放：进程多时靠滚动，不用把窗口撑到屏幕外。
+    -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="42"
+                            ResizeBorderThickness="6"
+                            GlassFrameThickness="0"
+                            CornerRadius="0"
+                            UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <views:NullToCollapsedInverseConverter x:Key="NullToCollapsedInverse"/>
+        <views:StringToVisibilityConverter x:Key="StringToVisibility"/>
+
+        <!--
+          深色复选框：选中用蓝色填充（与主按钮同色系）。
+          备注：保护浮窗用的是绿色（保护 = 安全），这里用蓝色（恢复 = 执行动作），
+          两个界面语义不同，配色也刻意区分开。
+        -->
+        <Style x:Key="RestoreCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#FFECEDEF"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <Border x:Name="Box" Width="16" Height="16" CornerRadius="4"
+                                    Background="Transparent" BorderBrush="#FF4A4E58" BorderThickness="1"
+                                    VerticalAlignment="Center">
+                                <Path x:Name="Tick" Data="M2.5,6.5 L5.5,9.5 L10.5,3.5"
+                                      Stroke="White" StrokeThickness="1.7"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="Collapsed"/>
+                            </Border>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#FF7C818C"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="#FF4C8DFF"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#FF4C8DFF"/>
+                                <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Box" Property="Opacity" Value="0.4"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 结果明细：只读、可复制，看起来不是输入框 -->
+        <Style x:Key="LogBox" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#FFB4B7BD"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="CaretBrush" Value="#FFECEDEF"/>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#FF2A2C33" BorderThickness="1" Background="#FF141519">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="42"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- 标题栏 -->
+            <Grid Grid.Row="0" Background="#FF141519" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Width="22" Height="22" CornerRadius="6" Background="#FF2A2C33"
+                        Margin="16,0,10,0" VerticalAlignment="Center">
+                    <TextBlock Text="复" FontSize="11" Foreground="#FFECEDEF"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="游戏模式已关闭" FontSize="13" FontWeight="SemiBold" Foreground="#FFECEDEF"/>
+                    <TextBlock Text="选择需要恢复的后台进程" FontSize="11" Margin="10,1,0,0"
+                               Foreground="#FF5C5F66"/>
+                </StackPanel>
+
+                <Button Grid.Column="2" Style="{StaticResource CloseButton}"
+                        WindowChrome.IsHitTestVisibleInChrome="True"
+                        Command="{Binding CloseCommand}" ToolTip="关闭（本次不恢复任何进程）">
+                    <Path Width="10" Height="10" Stroke="#FFB4B7BD" StrokeThickness="1.2"
+                          Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5"/>
+                </Button>
+            </Grid>
+
+            <!-- 顶部：统计 + 全选 -->
+            <Border Grid.Row="1" Background="#FF1B1C21" BorderBrush="#FF26282E" BorderThickness="0,1,0,1"
+                    Padding="16,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding HeaderSummary}" FontSize="13" FontWeight="SemiBold"/>
+                        <TextBlock Text="游戏模式已关闭，电源计划等改动已还原。下面只决定要不要把被关掉的后台程序重新打开。"
+                                   Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                    </StackPanel>
+
+                    <Button Grid.Column="1" Content="{Binding ToggleSelectAllText}"
+                            Command="{Binding ToggleSelectAllCommand}"
+                            VerticalAlignment="Center"
+                            ToolTip="只作用于可恢复的项；已跳过项不会因为全选被加入队列"/>
+                </Grid>
+            </Border>
+
+            <!-- 进程列表 -->
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled" Padding="16,12,16,4">
+                <ItemsControl ItemsSource="{Binding Items}"
+                              IsEnabled="{Binding CanInteract}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="#FF1B1C21" BorderBrush="#FF26282E" BorderThickness="1"
+                                    CornerRadius="10" Padding="12" Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- 勾选框：绑定 ViewModel，本身不存状态 -->
+                                    <CheckBox Grid.Column="0" Style="{StaticResource RestoreCheckBox}"
+                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              IsEnabled="{Binding CanSelect}"
+                                              VerticalAlignment="Center" Margin="0,0,12,0"
+                                              ToolTip="勾选后点「恢复所选」会按原始路径重新启动它"/>
+
+                                    <!-- 应用图标；读不到就退化成首字符色块 -->
+                                    <Border Grid.Column="1" Width="34" Height="34" CornerRadius="8"
+                                            Background="#FF25272E" VerticalAlignment="Center">
+                                        <Grid>
+                                            <Image Source="{Binding Icon}" Width="26" Height="26"
+                                                   RenderOptions.BitmapScalingMode="HighQuality"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding IconFallbackText}" FontSize="13"
+                                                       Foreground="#FF83868D"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       Visibility="{Binding Icon, Converter={StaticResource NullToCollapsedInverse}}"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <StackPanel Grid.Column="2" Margin="10,0,12,0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding AppName}" FontSize="13" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <Border BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0"
+                                                    VerticalAlignment="Center" BorderBrush="{Binding BadgeHex}">
+                                                <TextBlock Text="{Binding BadgeText}" FontSize="10"
+                                                           Foreground="{Binding BadgeHex}"/>
+                                            </Border>
+                                        </StackPanel>
+
+                                        <TextBlock Text="{Binding ExecutableName}" Style="{StaticResource Faint}"
+                                                   Margin="0,3,0,0"/>
+                                        <TextBlock Text="{Binding PublisherText}" Style="{StaticResource Faint}"
+                                                   TextTrimming="CharacterEllipsis"/>
+
+                                        <!-- 简短说明：与标题重复时不显示 -->
+                                        <TextBlock Text="{Binding DescriptionText}" Style="{StaticResource Faint}"
+                                                   TextWrapping="Wrap" Margin="0,3,0,0"
+                                                   Visibility="{Binding HasDescription, Converter={StaticResource BoolToVisibility}}"/>
+                                    </StackPanel>
+
+                                    <!-- 恢复资格与原因：能恢复写依据，跳过写为什么 -->
+                                    <TextBlock Grid.Column="3" Text="{Binding ReasonText}" FontSize="11"
+                                               Foreground="{Binding ReasonHex}"
+                                               VerticalAlignment="Center" MaxWidth="210"
+                                               TextWrapping="Wrap" TextAlignment="Right"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- 底部：状态 / 进度 / 结果 + 按钮 -->
+            <Border Grid.Row="3" Background="#FF1B1C21" BorderBrush="#FF26282E" BorderThickness="0,1,0,0"
+                    Padding="16,10,16,12">
+                <StackPanel>
+                    <!-- 进行中：进度条 + 当前项 -->
+                    <StackPanel Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisibility}}">
+                        <ProgressBar Height="3" IsIndeterminate="True" BorderThickness="0"
+                                     Background="#FF26282E" Foreground="#FF4C8DFF" Margin="0,0,0,6"/>
+                        <TextBlock Text="{Binding ProgressText}" FontSize="11" Foreground="#FF4C8DFF"/>
+                    </StackPanel>
+
+                    <!-- 结果摘要 -->
+                    <TextBlock Text="{Binding ResultSummary}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="#FFECEDEF" Margin="0,0,0,4"
+                               Visibility="{Binding HasResult, Converter={StaticResource BoolToVisibility}}"/>
+
+                    <!-- 逐项明细（不贴堆栈、不贴完整路径） -->
+                    <Border Background="#FF15161A" CornerRadius="8" Padding="10" Margin="0,4,0,6"
+                            Visibility="{Binding HasDetailedLog, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Text="详细日志" Style="{StaticResource Faint}" Margin="0,0,0,3"/>
+                            <ScrollViewer MaxHeight="96" VerticalScrollBarVisibility="Auto">
+                                <TextBox Text="{Binding DetailedLog, Mode=OneWay}" Style="{StaticResource LogBox}"/>
+                            </ScrollViewer>
+                            <TextBlock Text="{Binding LogPathText, StringFormat=完整日志：{0}}"
+                                       Style="{StaticResource Faint}" Margin="0,4,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Grid Margin="0,2,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                            <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                       Foreground="{Binding StatusHex}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding SelectedSummary}" Style="{StaticResource Faint}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="{Binding CloseButtonText}" Command="{Binding CloseCommand}"
+                                    Margin="0,0,8,0"
+                                    ToolTip="关闭本窗口：本次不恢复任何进程，游戏模式也不会重新开启"/>
+                            <Button Content="{Binding RestoreButtonText}" Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding RestoreSelectedCommand}" MinWidth="120"
+                                    Visibility="{Binding ShowRestoreButton, Converter={StaticResource BoolToVisibility}}"
+                                    ToolTip="只启动你勾选的进程；逐项启动并确认是否真的运行起来"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="恢复只做一件事：按关闭前的原始路径把程序重新打开。不会绕过权限、不会以 SYSTEM 身份启动，系统关键进程也不会出现在可恢复队列里。"
+                               Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

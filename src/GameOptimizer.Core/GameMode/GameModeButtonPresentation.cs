@@ -76,5 +76,5 @@ public static class GameModeButtonPresentation
     /// <summary>处理中的状态行文案，必须说清在等什么，而不是一句「请稍候」。</summary>
     public static string WorkingStatus(bool entering) => entering
         ? "正在开启游戏模式…（切换电源计划并结束后台进程，可能需要几秒）"
-        : "正在关闭游戏模式…（正在恢复被结束的进程）";
+        : "正在关闭游戏模式…（正在还原电源计划等改动，进程由你在下一步选择）";
 }

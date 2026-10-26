@@ -73,11 +73,47 @@ public partial class MainWindow : Window
     private void AttachViewModel()
     {
         if (_subscribedVm is not null)
+        {
             _subscribedVm.OpenBackgroundManagerRequested -= OnOpenBackgroundManagerRequested;
+            _subscribedVm.RestoreSelectionRequested -= OnRestoreSelectionRequested;
+        }
 
         _subscribedVm = DataContext as MainViewModel;
         if (_subscribedVm is not null)
+        {
             _subscribedVm.OpenBackgroundManagerRequested += OnOpenBackgroundManagerRequested;
+            _subscribedVm.RestoreSelectionRequested += OnRestoreSelectionRequested;
+        }
+    }
+
+    /// <summary>
+    /// 关闭游戏模式后弹出的「选择需要恢复的后台进程」窗口。
+    ///
+    /// 必须是模态的：恢复期间主界面不该还能点「开启游戏模式」，
+    /// 否则会出现「关到一半又开一遍」的状态混战。
+    /// 无论用户是恢复、取消还是直接关窗，最后都要 Complete——
+    /// 否则 ViewModel 会一直等这个任务，游戏模式按钮永远停在「关闭中」。
+    /// </summary>
+    private void OnRestoreSelectionRequested(object? sender, ProcessRestoreRequest request)
+    {
+        try
+        {
+            var window = new ProcessRestoreWindow
+            {
+                DataContext = request.ViewModel,
+                Owner = this,
+            };
+            window.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            // 弹窗起不来也不能把游戏模式卡在「关闭中」：记日志并如实告诉用户没恢复
+            GameOptimizer.Core.GameMode.ProcessRestoreLog.Write($"[界面] 恢复选择窗口打开失败 · {ex.GetType().Name} · {ex.Message}");
+        }
+        finally
+        {
+            request.Complete(request.ViewModel.RestoreAttempted);
+        }
     }
 
     /// <summary>打开（或前置）后台进程保护浮窗。重复触发不会产生第二个窗口。</summary>
@@ -158,6 +194,7 @@ public partial class MainWindow : Window
         if (_subscribedVm is not null)
         {
             _subscribedVm.OpenBackgroundManagerRequested -= OnOpenBackgroundManagerRequested;
+            _subscribedVm.RestoreSelectionRequested -= OnRestoreSelectionRequested;
             _subscribedVm = null;
         }
 

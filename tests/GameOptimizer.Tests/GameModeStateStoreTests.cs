@@ -88,4 +88,51 @@ public class GameModeStateStoreTests : IDisposable
             try { Directory.Delete(Path.GetDirectoryName(nested.FilePath)!, true); } catch { }
         }
     }
+
+    [Fact]
+    public void 旧版快照只有电源计划时仍应可读()
+    {
+        // v2.4.0 及以前写的文件就只有这一个字段，升级后必须继续认
+        File.WriteAllText(_path, """{"previousPowerPlanGuid":"381b4222-f694-41f0-9685-ff5bb260df2e"}""");
+
+        var loaded = _store.Load();
+
+        loaded.Should().NotBeNull();
+        loaded!.PreviousPowerPlanGuid.Should().Be("381b4222-f694-41f0-9685-ff5bb260df2e");
+        loaded.Killed.Should().BeEmpty("老文件没有 killed 字段，应回落到空列表而不是 null");
+    }
+
+    [Fact]
+    public void 旧版快照的进程记录仍应可读()
+    {
+        File.WriteAllText(_path, """
+        {
+          "previousPowerPlanGuid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+          "killed": [
+            { "name": "WeChat", "launchPath": "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe" }
+          ]
+        }
+        """);
+
+        var loaded = _store.Load();
+
+        loaded!.Killed.Should().ContainSingle();
+        loaded.Killed[0].Name.Should().Be("WeChat");
+        loaded.Killed[0].LaunchPath.Should().EndWith("WeChat.exe");
+    }
+
+    [Fact]
+    public void 延迟恢复写出的快照应只有进程没有电源计划()
+    {
+        // 「游戏模式已关闭、但还有进程没恢复」这个中间态：电源计划已还原，进程待用户选择
+        _store.Save(new GameModeSnapshot
+        {
+            Killed = [new GameModeKilledProcess { Name = "kugou", LaunchPath = @"D:\Apps\kugou.exe" }],
+        });
+
+        var loaded = _store.Load();
+
+        loaded!.PreviousPowerPlanGuid.Should().BeNull();
+        loaded.Killed.Should().ContainSingle().Which.Name.Should().Be("kugou");
+    }
 }
