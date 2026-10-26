@@ -50,12 +50,50 @@ public class VersionConsistencyTests
     }
 
     [Fact]
-    public void 当前版本应为2_4_1()
+    public void 当前版本应为2_5_0()
     {
-        // 版本号由用户手动设定；升级时改这里和 Directory.Build.props
+        // 版本号按 docs/03-版本规则.md 的规则自动推进（tools/bump-version.ps1 同步此处）。
+        // 保留这条硬断言：改了 props 却漏掉某个文件时，这里第一个变红。
         AssemblyVersion.Major.Should().Be(2);
-        AssemblyVersion.Minor.Should().Be(4);
-        AssemblyVersion.Build.Should().Be(1);
+        AssemblyVersion.Minor.Should().Be(5);
+        AssemblyVersion.Build.Should().Be(0);
+    }
+
+    [Fact]
+    public void 文档与README里的版本号应与props一致()
+    {
+        // 版本号由 tools/bump-version.ps1 一处推进、七处同步；
+        // 漏掉任何一处，用户就会在不同地方看到两个版本号，比没有版本号更糟。
+        var tag = "v" + DeclaredVersion();
+
+        File.ReadAllText(Path.Combine(RepoRoot(), "docs", "02-功能清单.md"))
+            .Should().StartWith($"# 功能清单（{tag}）");
+
+        File.ReadAllText(Path.Combine(RepoRoot(), "docs", "04-已知限制.md"))
+            .Should().StartWith($"# 已知限制（{tag}）");
+
+        File.ReadAllText(Path.Combine(RepoRoot(), "docs", "README.md"))
+            .Should().Contain($"当前版本：**{tag}**");
+
+        File.ReadAllText(Path.Combine(RepoRoot(), "README.md"))
+            .Should().Contain($"**{tag}** ｜");
+    }
+
+    [Fact]
+    public void 版本推进脚本应存在且覆盖同步清单()
+    {
+        // 手工改版本号就是漏改的开始：脚本必须知道全部落点，缺一个就等于没有自动化
+        var script = Path.Combine(RepoRoot(), "tools", "bump-version.ps1");
+        File.Exists(script).Should().BeTrue("版本号按规则自动推进，脚本是唯一入口");
+
+        var text = File.ReadAllText(script);
+        text.Should().Contain("Directory.Build.props");
+        text.Should().Contain("VersionConsistencyTests.cs");
+        text.Should().Contain("docs\\02-功能清单.md");
+        text.Should().Contain("docs\\04-已知限制.md");
+        text.Should().Contain("docs\\README.md");
+        text.Should().Contain("README.md");
+        text.Should().Contain("'feature'").And.Contain("'fix'").And.Contain("'major'");
     }
 
     [Fact]
@@ -81,6 +119,15 @@ public class VersionConsistencyTests
             var text = File.ReadAllText(csproj);
             text.Should().NotContain("<Version>", $"{Path.GetFileName(csproj)} 不应自己定义 <Version>");
         }
+    }
+
+    /// <summary>从 Directory.Build.props 读出「唯一真源」的版本号，如 2.5.0。</summary>
+    private static string DeclaredVersion()
+    {
+        var props = File.ReadAllText(Path.Combine(RepoRoot(), "Directory.Build.props"));
+        var match = System.Text.RegularExpressions.Regex.Match(props, @"<Version>([\d.]+)</Version>");
+        match.Success.Should().BeTrue("Directory.Build.props 里必须有 <Version>");
+        return match.Groups[1].Value;
     }
 
     private static string RepoRoot()
