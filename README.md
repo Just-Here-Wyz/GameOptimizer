@@ -4,21 +4,27 @@
 
 [完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
 
-## 直接下载
+## 下载
 
-**[⬇ 下载 v2.2.2（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.2.2)**
+**当前没有可下载的安装包。**
 
-> 源码已到 **v2.3.0**，安装包尚未发布；当前可下载的仍是 v2.2.2。
+源码已到 **v2.3.0**（含 CPU 诊断页、CPU 快速优化、后台进程保护浮窗重构），
+但还没有发布对应版本。旧的 v2.2.2 已从 Release 撤下——它的界面与功能说明都和现在的源码对不上，
+留着容易让人按旧说明去找一个已经改名、改位置的按钮。
 
-Windows 10 / 11 x64 · 69 MB · **自包含，无需安装 .NET 运行时** · 双击即用
-（程序声明 `requireAdministrator`，启动会弹 UAC）
+想先跑起来，可以直接构建（需要 .NET 8 SDK）：
 
-| 附件 | 说明 |
-|---|---|
-| `GameOptimizer-v2.2.2-win-x64.exe` | 单文件自包含，双击运行 |
-| `SHA256SUMS.txt` | 校验值，下载后可用 `certutil -hashfile <exe> SHA256` 对比 |
+```powershell
+git clone git@github.com:Just-Here-Wyz/GameOptimizer.git
+cd GameOptimizer
+dotnet run --project src/GameOptimizer.App
+```
 
-> 未签名证书，首次运行可能触发 SmartScreen「更多信息 → 仍要运行」。
+> 用 `dotnet run` 启动时程序不会自动提权（宿主是 `dotnet.exe`，自提权会主动跳过），
+> 内存清理与电源计划会提示权限不足。正式发布版是单文件 exe、自包含 .NET 运行时、
+> 声明 `requireAdministrator`，双击即用、不用装运行时。
+>
+> 发布产物未做代码签名，届时首次运行可能触发 SmartScreen「更多信息 → 仍要运行」。
 
 ---
 
