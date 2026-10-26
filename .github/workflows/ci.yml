@@ -30,10 +30,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装 .NET 8 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
@@ -53,10 +53,37 @@ jobs:
           --logger "trx;LogFileName=test-results.trx"
           --results-directory ${{ runner.temp }}/test-results
 
+      # 失败时把用例名直接写进 Actions 摘要。理由：trx 附件要登录才能下，
+      # 控制台日志一屏几千行也翻不到关键那行；摘要页打开就能看见是哪条挂了。
+      - name: 汇总失败用例
+        if: always()
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'test-results'
+          $trx = Get-ChildItem $dir -Recurse -Filter *.trx -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $trx) {
+            Add-Content $env:GITHUB_STEP_SUMMARY '未找到 trx：测试可能根本没跑起来'
+            exit 0
+          }
+
+          [xml]$doc = Get-Content $trx.FullName -Raw
+          $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+          $ns.AddNamespace('t', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
+
+          $all = $doc.SelectNodes('//t:UnitTestResult', $ns)
+          $bad = $doc.SelectNodes('//t:UnitTestResult[@outcome="failed"]', $ns)
+
+          Add-Content $env:GITHUB_STEP_SUMMARY "## 测试结果：$($all.Count - $bad.Count) 通过 / 共 $($all.Count)"
+
+          foreach ($f in $bad) {
+            $first = ($f.Output.ErrorInfo.Message -split "`n")[0]
+            Add-Content $env:GITHUB_STEP_SUMMARY "- **$($f.testName)** — $first"
+          }
+
       # 失败时也要留档：没有 trx 就只能看控制台尾部，定位不到是哪一条挂的
       - name: 上传测试结果
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results
           path: ${{ runner.temp }}/test-results

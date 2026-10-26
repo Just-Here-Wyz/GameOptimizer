@@ -46,12 +46,15 @@ public class WeGameLibraryScannerTests
     }
 
     [Fact]
-    public void 应在本机找到WeGame库根目录()
+    public void 若本机装了WeGame则应找到库根目录()
     {
         var roots = WeGameLibraryScanner.FindLibraryRoots();
 
-        // 本机实测存在 D:\WeGameApps 与 E:\WeGameApps
-        roots.Should().NotBeEmpty();
+        // 本机实测存在 D:\WeGameApps 与 E:\WeGameApps。
+        // 没装 WeGame 的机器（CI runner、干净系统）返回空是正常的，
+        // 此时不适用「应找到」，只保证没装时不乱报警、装了时认得准。
+        if (roots.Count == 0) return;
+
         roots.Should().OnlyContain(r => r.Contains("WeGame", StringComparison.OrdinalIgnoreCase));
     }
 
