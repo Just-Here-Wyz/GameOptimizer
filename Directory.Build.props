@@ -3,10 +3,12 @@
   <!--
     版本号集中定义。所有项目通过 Directory.Build.props 继承，不要在各 csproj 里重复写。
 
-    版本规则（用户约定）：
-      外观/功能更新 → 次版本号 +1（如 v0.5.0 → v1.0.0）
-      仅修 bug     → 修订号 +1（如 v0.5.0 → v0.5.1）
-    实际版本号由用户手动设定，这里只放当前值。
+    版本规则（详见 docs/03-版本规则.md）：
+      外观/功能更新 → 次版本号 +1、修订号归零
+      仅修 bug     → 修订号 +1
+
+    **不要手工改这里的版本号**：跑 tools/bump-version.ps1 -Kind feature|fix，
+    它会同时同步这里三处、VersionConsistencyTests 的断言、docs 标题与两份 README。
   -->
   <PropertyGroup>
     <Version>2.5.0</Version>
