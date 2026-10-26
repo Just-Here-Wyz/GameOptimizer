@@ -3,6 +3,7 @@ namespace GameOptimizer.App.ViewModels;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Data;
 using System.Windows.Threading;
@@ -143,6 +144,45 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool SamplerReady { get; }
     public string SamplerStatus { get; }
+
+    /// <summary>
+    /// 左下角与设置页显示的版本号（如 <c>v2.3.0</c>）。
+    ///
+    /// 从程序集信息读，不在 XAML 里写死：只要 `Directory.Build.props` 升了版本，
+    /// 界面立刻跟着变，不存在「代码 2.4.0、界面还写 2.3.0」这种对不上的情况。
+    /// 程序集信息里若带 <c>+commit</c> 后缀（SourceLink 会加），这里只留版本号本身。
+    /// </summary>
+    public static string AppVersionText { get; } = BuildVersionText(compact: true);
+
+    /// <summary>设置页用：带文件版本，方便排查「装的是不是这个包」。</summary>
+    public static string AppVersionDetail { get; } = BuildVersionText(compact: false);
+
+    private static string BuildVersionText(bool compact)
+    {
+        var assembly = typeof(MainViewModel).Assembly;
+
+        var informational = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        var text = informational;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            var plus = text.IndexOf('+');
+            if (plus > 0) text = text[..plus];
+        }
+        else
+        {
+            var v = assembly.GetName().Version;
+            text = v is null ? "未知" : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
+
+        if (compact) return $"v{text}";
+
+        var fileVersion = assembly.GetName().Version;
+        var file = fileVersion is null ? "未知" : $"{fileVersion.Major}.{fileVersion.Minor}.{fileVersion.Build}.{fileVersion.Revision}";
+        return $"v{text}（文件版本 {file}）";
+    }
 
     /// <summary>设置页的使用说明书。界面不再各页散落说明文字，统一从这里读。</summary>
     public IReadOnlyList<ManualSection> ManualSections => ToolManual.Sections;

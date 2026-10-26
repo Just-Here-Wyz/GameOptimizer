@@ -34,10 +34,8 @@ public partial class MainWindow : Window
 
         WindowChromeHelper.ApplyMaximizeFix(this);
 
-        // 版本号从程序集读，避免界面上写死一个和 csproj 对不上的数字
-        var version = typeof(MainWindow).Assembly.GetName().Version;
-        if (version is not null)
-            VersionText.Text = $"版本 v{version.Major}.{version.Minor}.{version.Build}";
+        // 版本号统一由 MainViewModel.AppVersionText / AppVersionDetail 提供
+        // （左下角与设置页共用一处来源，避免升级时漏改）。
 
         // 最小化时界面不可见：同样停掉每秒采集，恢复时再开。
         // 托盘隐藏走 App.OnWindowClosing（Hide 不触发 StateChanged，WindowState 仍是 Normal）。
