@@ -1,19 +1,20 @@
 # 游戏优化助手
 
-> **v2.4.0** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
+> **v2.4.1** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
 
 [完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
 
 ## 下载
 
-**[⬇ 下载 v2.4.0（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.4.0)**
+**[⬇ 下载 v2.4.1（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.4.1)**
 
 Windows 10 / 11 x64 · 约 69 MB · **自包含，无需安装 .NET 运行时** · 双击即用
 （程序声明 `requireAdministrator`，启动会弹 UAC）
 
 | 附件 | 说明 |
 |---|---|
-| `GameOptimizer-v2.4.0-win-x64.exe` | 单文件自包含，双击运行 |
+| `GameOptimizer-v2.4.1-win-x64.exe` | 单文件自包含，双击运行，免安装 |
+| `GameOptimizer-Setup-v2.4.1.exe` | Inno Setup 安装程序，装到 `Program Files` 并建开始菜单 / 桌面快捷方式与卸载项 |
 | `SHA256SUMS.txt` | 校验值，下载后可用 `certutil -hashfile <exe> SHA256` 对比 |
 
 > 发布产物未做代码签名，首次运行可能触发 SmartScreen「更多信息 → 仍要运行」。
@@ -105,7 +106,7 @@ dotnet run --project src/GameOptimizer.App
 > v2.0.0 起程序声明 `requireAdministrator`，启动会弹 UAC。
 > 内存清理、电源计划、结束高权限进程都需要管理员权限。
 
-> **版本状态**：**v2.4.0 已发布**（2026-10-26）。版本号由作者按 [版本规则](docs/03-版本规则.md) 手动设定。
+> **版本状态**：**v2.4.1 已发布**（2026-10-26）。版本号由作者按 [版本规则](docs/03-版本规则.md) 手动设定。
 
 ## 界面
 
@@ -135,7 +136,7 @@ dotnet run --project src/GameOptimizer.App
 | 项 | 数据 |
 |---|---|
 | 开发周期 | 2026-10-19 ~ 10-22，**4 天完成主体功能**（36 次提交） |
-| 提交与版本 | 累计 **60+ 次提交**、**15 个版本 tag**（v0.5.0 → v2.4.0） |
+| 提交与版本 | 累计 **60+ 次提交**、**16 个版本 tag**（v0.5.0 → v2.4.1） |
 | 代码量 | C# **25,512 行 / 142 个文件**（src + tests，不含生成代码）+ XAML 1,952 行 |
 | 测试 | **760 个 xUnit 用例**，只引用 `GameOptimizer.Core`，不引入 UI 依赖；少量用例会读真实系统（进程列表 / 电源计划 / 性能计数器）做一致性校验 |
 | 分层 | `Core` 无 UI 依赖、可单测；`App` 只做 WPF 呈现与交互 |
