@@ -55,13 +55,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// 保护名单存储位置。默认用 %LocalAppData% 下的真实配置；
     /// 离屏渲染时传临时文件，避免截图过程改动使用者真实的勾选状态。
     /// </param>
+    /// <param name="elevatedOverride">
+    /// 提权状态覆盖值，null 表示按真实进程检测。
+    /// 只有离屏渲染会传 true：渲染进程从不提权，不覆盖的话每张截图都会多一条
+    /// 「当前未以管理员身份运行」的黄条——那是截图环境的产物，不是用户看到的样子。
+    /// </param>
     public MainViewModel(
         PdhSampler sampler,
         bool samplerReady,
         GameModeController gameMode,
         DownloadStore? downloadStore = null,
-        BackgroundWhitelistStore? whitelistStore = null)
+        BackgroundWhitelistStore? whitelistStore = null,
+        bool? elevatedOverride = null)
     {
+        IsElevated = elevatedOverride ?? ElevationStatus.IsCurrentProcessElevated();
         _sampler = sampler;
         _gameMode = gameMode;
         _whitelistStore = whitelistStore ?? new BackgroundWhitelistStore();
@@ -190,8 +197,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// 权限状态：清单里已声明 requireAdministrator，双击即提权。
     /// 但仍要检测——用户可能通过计划任务、非 UAC 路径启动，此时前面那句提示就不该出现。
+    /// 离屏渲染可通过构造参数的 <c>elevatedOverride</c> 覆盖，避免截图带上环境的黄条。
     /// </summary>
-    public bool IsElevated { get; } = ElevationStatus.IsCurrentProcessElevated();
+    public bool IsElevated { get; }
+
+    /// <summary>
+    /// 截图模式：仅 <c>--render</c> 置位。
+    ///
+    /// 置位后路径类属性走脱敏（用户目录 → <c>%USERPROFILE%</c>）、
+    /// 配置文件路径显示真实的默认位置而非渲染用的临时文件。
+    /// 运行时不置位，界面显示与脱敏前完全一致。
+    /// </summary>
+    internal static bool ScreenshotMode { get; set; }
 
     /// <summary>
     /// 显存预算：从 DXGI 读显卡真实容量——独显取专用显存，核显取专用 + 共享。
@@ -802,7 +819,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>配置文件真实路径，界面显示出来方便用户手改。</summary>
-    public string BackgroundConfigPath => _whitelistStore.FilePath;
+    public string BackgroundConfigPath => ScreenshotMode
+        // 截图里不能出现 C:\Users\<名>\AppData\Local\Temp\go-render-whitelist.json 这种渲染痕迹
+        ? @"%LocalAppData%\GameOptimizer\background-whitelist.json"
+        : _whitelistStore.FilePath;
 
     /// <summary>列表顶部的计数：总数 / 受保护 / 会被结束 / 无法识别。</summary>
     public string BackgroundCountText
@@ -1877,7 +1897,8 @@ public sealed class GameStatusItem(GameEntry entry, GameVramAssessment assessmen
     public GameEntry Entry => entry;
     public string Name => entry.Name;
     public string SizeText => $"{entry.SizeOnDiskGb:F1} GB";
-    public string Path => entry.InstallPath;
+    /// <summary>安装路径。截图模式下用户目录会被脱敏，避免 README 暴露本机账户名。</summary>
+    public string Path => PathRedactor.Redact(entry.InstallPath);
 
     /// <summary>游戏 exe 的图标；扫描不到 exe 路径时为 null，界面退化为首字符色块。</summary>
     public System.Windows.Media.ImageSource? Icon => AppIconCache.ForPath(entry.ExecutablePath);
@@ -1984,8 +2005,10 @@ public sealed class BackgroundProcessEntry : INotifyPropertyChanged
     public string? ProductName => _info.ProductName;
     public string? FileVersion => _info.FileVersion;
 
-    /// <summary>完整路径；读不到时明确写出来，界面不做留白。</summary>
-    public string PathText => _info.ExecutablePath ?? "（读不到可执行文件路径）";
+    /// <summary>完整路径；读不到时明确写出来，界面不做留白。截图模式下用户目录会被脱敏。</summary>
+    public string PathText => _info.ExecutablePath is null
+        ? "（读不到可执行文件路径）"
+        : PathRedactor.Redact(_info.ExecutablePath);
     public bool HasPath => _info.ExecutablePath is not null;
 
     public bool IsIdentityUnknown => _info.IsIdentityUnknown;

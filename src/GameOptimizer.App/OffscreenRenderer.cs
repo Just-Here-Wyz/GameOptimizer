@@ -19,7 +19,11 @@ using System.Windows.Media.Imaging;
 /// 再渲染那个 Border。
 ///
 /// 用法：<c>GameOptimizer.App.dll --render &lt;输出目录&gt; [页面名,...]</c>
-/// 页面名可选 home / peripherals / download / settings / cpu，缺省渲染全部。
+/// 页面名可选 home / peripherals / download / settings / cpu / background，缺省渲染全部。
+///
+/// 截图会进 README（公开仓库），所以渲染全程按「演示状态」跑：
+/// 提权状态按已提权处理、路径里的用户目录脱敏、下载目录用中性值。
+/// 这几步在 <see cref="EnterScreenshotMode"/> 里集中做，别在各页零散地改。
 /// </summary>
 internal static class OffscreenRenderer
 {
@@ -29,10 +33,20 @@ internal static class OffscreenRenderer
     /// <summary>画布上限：内容再高也不再撑（再高就该滚动而不是截一张巨图）。</summary>
     private const int MaxHeight = 1400;
 
+    /// <summary>
+    /// CPU 页要攒够多少秒才截。
+    ///
+    /// 诊断页的趋势图画的是「最近 30 秒」：只攒十几秒，折线就只占右边一小截，
+    /// 左边全是空白——读者会以为这张图没加载完。所以至少攒满整个窗口。
+    /// </summary>
+    private const int CpuWarmupSeconds = 32;
+
     /// <summary>内容比默认窗口高的页面，单独指定画布高度。</summary>
     private static readonly Dictionary<string, int> PageHeights = new()
     {
-        ["cpu"] = 1250,
+        // 诊断子页内容随「高占用进程」行数浮动（2~4 行）；840 能容下 4 行且不截断诊断建议。
+        // 高级详情（逐核条形图）更高，拍那页时临时调大。
+        ["cpu"] = 840,
     };
 
     /// <summary>页面名 → 导航序号（cpu 详情页不走导航，由 OpenCpuDetailCommand 打开）。</summary>
@@ -47,6 +61,7 @@ internal static class OffscreenRenderer
 
     public static string RenderAll(string outputDirectory, string? only = null)
     {
+        EnterScreenshotMode();
         Directory.CreateDirectory(outputDirectory);
         _tracePath = Path.Combine(outputDirectory, "_render.log");
         Trace("render all start, only=" + (only ?? "(all)"));
@@ -96,13 +111,25 @@ internal static class OffscreenRenderer
         };
         Trace("bg vm created");
 
-        // 展开第一行的详情，让「完整路径 / 识别依据」这块也进截图；
+        // 展开一行详情，让「完整路径 / 识别依据」这块也进截图；
         // 并模拟「一行受保护」，把两种结果（会结束 / 不会结束）都拍进去
         if (window.DataContext is GameOptimizer.App.ViewModels.MainViewModel vm)
         {
+            // 展开哪一行有讲究：优先挑一个 exe 在用户目录下的进程。
+            // 脱敏后它的路径是 %USERPROFILE%\AppData\...，既完整可读、又不会把
+            // 使用者装了什么的私人目录（比如代理工具）拍进公开截图。
+            // 只看前几行——更靠下的行展开后落在浮窗可视区之外，截不到。
             var rows = vm.BackgroundProcesses;
-            if (rows.Count > 0) rows[0].IsExpanded = true;
-            if (rows.Count > 0) rows[0].IsProtected = true;
+            var demo = rows
+                .Take(4)
+                .FirstOrDefault(r => r.PathText.StartsWith("%USERPROFILE%", StringComparison.Ordinal))
+                ?? rows.FirstOrDefault();
+
+            if (demo is not null)
+            {
+                demo.IsExpanded = true;
+                demo.IsProtected = true;
+            }
         }
 
         var content = (UIElement)window.Content;
@@ -125,8 +152,27 @@ internal static class OffscreenRenderer
         {
             vm.NavigateTo(navIndex);
 
+            // 下载页的保存目录默认取本机 %USERPROFILE%\Downloads，截图里换成中性路径
+            if (name == "download") vm.Downloads.SaveDirectory = @"D:\Downloads";
+
             // CPU 详情页是总览页上的浮层，靠命令打开，不走导航
-            if (name == "cpu") vm.OpenCpuDetailCommand.Execute(null);
+            if (name == "cpu")
+            {
+                vm.OpenCpuDetailCommand.Execute(null);
+
+                // 诊断页的结论要「连续 10 秒」才落地，趋势图要 30 个点才有形状。
+                // 不预热就截，拍到的是「采样中 · 已覆盖 1 秒」加一张空折线图——那不是这一页真实的样子。
+                vm.SetSamplingActive(true);
+                for (var i = 0; i < CpuWarmupSeconds; i++)
+                {
+                    // 拆成两次短泵：渲染器自己的帧定时器优先级是 Send，
+                    // 单次 1000ms 的泵经常正好卡在 VM 那个 1 秒采集定时器之前结束，
+                    // 结果等 32 秒只攒到 14 帧，趋势图还是空的。两段加起来 1.2 秒就稳过采集点。
+                    PumpDispatcher(700);
+                    PumpDispatcher(500);
+                }
+                Trace($"cpu warmed {CpuWarmupSeconds}s");
+            }
         }
         Trace("navigated");
 
@@ -290,6 +336,23 @@ internal static class OffscreenRenderer
             // 保护名单同样用临时文件：截图过程中会模拟勾选保护，
             // 绝不能写到使用者真实的 background-whitelist.json 里
             new GameOptimizer.Core.Library.BackgroundWhitelistStore(
-                Path.Combine(Path.GetTempPath(), "go-render-whitelist.json")));
+                Path.Combine(Path.GetTempPath(), "go-render-whitelist.json")),
+
+            // 渲染进程从不提权，按已提权处理，否则每张图都会多一条黄色警告横幅
+            elevatedOverride: true);
+    }
+
+    /// <summary>
+    /// 进入截图模式。集中做三件事，各页不再零散处理：
+    ///
+    /// 1. 路径脱敏（用户目录 → %USERPROFILE%）——README 是公开的，不能带本机账户名；
+    /// 2. 下载页保存目录换成中性路径——否则截图里是 C:\Users\&lt;名&gt;\Downloads；
+    /// 3. 记录内存里的标记，供 <see cref="GameOptimizer.App.ViewModels.MainViewModel"/> 判断。
+    /// </summary>
+    private static void EnterScreenshotMode()
+    {
+        GameOptimizer.App.ViewModels.MainViewModel.ScreenshotMode = true;
+        Trace("screenshot mode on, profile=" + PathRedactor.Redact(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
     }
 }
