@@ -13,7 +13,10 @@ coverage*.xml
 
 # 发布产物
 publish/
-installer/
+
+# 安装包构建的中间产物（脚本与语言文件要入库，产物不入库）
+installer/*.exe
+installer/output/
 
 # 运行时产物（采集到的 CSV 等）
 captures/

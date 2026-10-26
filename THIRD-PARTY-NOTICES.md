@@ -96,6 +96,13 @@ PCL 的实质功能是 Minecraft 启动器（启动游戏、下载游戏资源�
 | coverlet.collector | 6.0.0 | MIT | 覆盖率采集 |
 | System.Diagnostics.PerformanceCounter | 8.0.1 | MIT | 性能计数器封装 |
 
+**构建期工具（不进入程序产物）**：
+
+| 组件 | 许可 | 用途 |
+|---|---|---|
+| Inno Setup 6 | Inno Setup License（允许自由使用与再分发） | 生成 Windows 安装程序 |
+| `installer/languages/ChineseSimplified.isl` | 随 Inno Setup 源码仓库分发，保留原作者署名 | 安装向导的简体中文界面（取自 `jrsoftware/issrc` 的 `Files/Languages`） |
+
 ---
 
 ## 五、本项目主动划定的技术边界

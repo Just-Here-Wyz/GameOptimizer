@@ -28,6 +28,24 @@ dotnet run --project src/GameOptimizer.App
 
 > `dotnet run` 的宿主是 `dotnet.exe`，程序会主动跳过自提权，内存清理与电源计划会提示权限不足。
 
+### 打包成安装程序（可选）
+
+想把单文件 exe 变成「能安装、能覆盖安装、能卸载」的安装包，用仓库里的 Inno Setup 脚本：
+
+```powershell
+winget install --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements
+pwsh -File installer\build-installer.ps1        # 版本号取自 Directory.Build.props，脚本里不写死
+```
+
+产物：`publish/win-x64/GameOptimizer-Setup-v<版本>.exe`（约 64 MB，附 `SHA256SUMS.txt` 校验值）。
+
+- 默认**只给当前用户装**到 `%LocalAppData%\Programs\GameOptimizer`：向导全程不请求管理员，程序启动时自己提权；
+  想把程序装进 `Program Files`，在向导第一页改选「为所有这台电脑的用户安装」即可。
+- 开始菜单快捷方式默认创建，桌面快捷方式默认不勾，完成页可以勾「立即启动」。
+- 升级直接再跑一遍新安装包（同一 `AppId`，不会多出一条「应用和功能」记录）。
+- 卸载只删程序文件与快捷方式，`%LocalAppData%\GameOptimizer` 里的保护名单、下载任务、游戏模式快照**一律保留**。
+- 应用正在运行时会提示先自己退出，安装器不会强杀进程；安装包未签名，首次运行可能被 SmartScreen 拦一次。
+
 ---
 
 面向「显存不足 / 卡顿掉帧」的 Windows 桌面诊断工具。不做「一键提速」的承诺，而是把**显存水位 + 硬件占用 + 外设状态**摆到同一屏，告诉你卡顿到底来自哪里。
