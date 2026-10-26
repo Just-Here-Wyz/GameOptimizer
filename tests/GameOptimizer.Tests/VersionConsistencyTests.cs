@@ -50,11 +50,11 @@ public class VersionConsistencyTests
     }
 
     [Fact]
-    public void 当前版本应为2_3_0()
+    public void 当前版本应为2_4_0()
     {
         // 版本号由用户手动设定；升级时改这里和 Directory.Build.props
         AssemblyVersion.Major.Should().Be(2);
-        AssemblyVersion.Minor.Should().Be(3);
+        AssemblyVersion.Minor.Should().Be(4);
         AssemblyVersion.Build.Should().Be(0);
     }
 
