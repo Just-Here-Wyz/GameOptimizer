@@ -1,5 +1,9 @@
 # 游戏优化助手
 
+[![CI](https://github.com/Just-Here-Wyz/GameOptimizer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Just-Here-Wyz/GameOptimizer/actions/workflows/ci.yml)
+[![version](https://img.shields.io/github/v/tag/Just-Here-Wyz/GameOptimizer?label=version&color=4C8DFF)](https://github.com/Just-Here-Wyz/GameOptimizer/releases)
+[![license](https://img.shields.io/github/license/Just-Here-Wyz/GameOptimizer?color=4C8DFF)](LICENSE)
+
 > **v2.5.0** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
 
 [完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
@@ -144,6 +148,7 @@ dotnet run --project src/GameOptimizer.App
 | 提交与版本 | 累计 **69 次提交**、**16 个版本 tag**（v0.5.0 → v2.5.0） |
 | 代码量 | C# **30,388 行 / 162 个文件**（src + tests，不含生成代码）+ XAML 2,574 行 / 6 个文件 |
 | 测试 | **880 个 xUnit 用例**，只引用 `GameOptimizer.Core`，不引入 UI 依赖；少量用例会读真实系统（进程列表 / 电源计划 / 性能计数器）做一致性校验 |
+| 持续集成 | GitHub Actions（`windows-latest`）：推送 `main` 与打 `v*` tag 时还原 → Release 构建 → 跑全量用例，失败会留下 trx 结果 |
 | 分层 | `Core` 无 UI 依赖、可单测；`App` 只做 WPF 呈现与交互 |
 
 ## 怎么做的（AI 协作说明）

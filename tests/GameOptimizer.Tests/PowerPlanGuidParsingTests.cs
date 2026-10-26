@@ -66,7 +66,13 @@ public class PowerPlanGuidParsingTests
     [Fact]
     public void 真实系统的当前计划应能被解析出来()
     {
-        // 集成验证：直接调用 powercfg，确保在本机真实环境下也能解析
+        // 集成验证：直接调用 powercfg，确保在本机真实环境下也能解析。
+        //
+        // 先确认 powercfg 存在再断言：CurrentPlanGuid() 内部会吞掉异常返回 null，
+        // 在没装电源组件的环境（精简容器 / 部分 CI 映像）里 null 并不代表解析回归。
+        // 把「环境缺失」和「解析失败」分开，断言部分一个没松。
+        if (!File.Exists(Path.Combine(Environment.SystemDirectory, "powercfg.exe"))) return;
+
         var guid = PowerPlanAction.CurrentPlanGuid();
 
         guid.Should().NotBeNull();

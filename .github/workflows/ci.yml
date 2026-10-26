@@ -1,0 +1,64 @@
+name: CI
+
+# 触发面刻意收窄：
+#   - main 的每次推送与 PR：日常regression
+#   - v* tag：发布前再复核一遍，保证 tag 指向的源码本身是绿的
+#   - 手动：想在不改代码的情况下重跑一次
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支连推时取消上一次，不浪费 runner 分钟
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: 构建与测试（Windows x64）
+    # Core 与 App 都是 net8.0-windows：Core 虽然不引用 WPF 类型，
+    # 但目标框架带 -windows，Linux runner 上还原就会失败，所以必须用 Windows。
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 还原依赖
+        run: dotnet restore GameOptimizer.sln
+
+      # Release 而不是 Debug：Debug 下 App 的 bin 常被正在运行的实例锁住，
+      # 本地踩过 MSB3027；CI 上虽然干净，但用 Release 与真正出包的口径保持一致。
+      - name: 构建
+        run: dotnet build GameOptimizer.sln --no-restore --configuration Release
+
+      - name: 运行测试
+        run: >
+          dotnet test GameOptimizer.sln
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ${{ runner.temp }}/test-results
+
+      # 失败时也要留档：没有 trx 就只能看控制台尾部，定位不到是哪一条挂的
+      - name: 上传测试结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: ignore
+          retention-days: 7
