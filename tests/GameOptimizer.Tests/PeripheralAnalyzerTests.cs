@@ -64,6 +64,17 @@ public class PeripheralAnalyzerTests
         Node(@"ROOT\HIDCLASS\0000", "HIDClass", friendly: "Virtual HID Device",
             hidProduct: "UMDF Virtual hid device Product string"),
 
+        // 罗技 G HUB 虚拟键盘（真机 2026-10-27 实测）：父设备 LGHUBDevice、服务 logi_joy_vir_hid，
+        // 硬件 ID 与真键盘完全一致，自报型号只有一个 "HID"，只能靠父设备前缀认出来
+        Node(@"HID\VID_046D&PID_C232\2&300BB0A1&0&0000", "Keyboard",
+            friendly: "HID Keyboard Device", hidProduct: "HID", manufacturer: "Logitech",
+            parent: @"LGHUBDevice\VID_046D&PID_C232\1&2d12bed1&0&01",
+            hardwareIds:
+            [
+                "HID\\VID_046D&PID_C232", "HID\\VID_046D&UP:0001_U:0006",
+                "HID_DEVICE_SYSTEM_KEYBOARD", "HID_DEVICE_UP:0001_U:0006", "HID_DEVICE",
+            ]),
+
         // 耳机：3.5mm 圆孔播放端点（真机容器 7131B19F…）
         Node(@"SWD\MMDEVAPI\{0.0.0.00000000}.{1CAD56D7}", "AudioEndpoint",
             friendly: "圆孔耳机 (Audio Device)", parent: OnboardAudioId,
@@ -381,6 +392,38 @@ public class PeripheralAnalyzerTests
 
         headsets.Should().HaveCount(1);
         headsets[0].Model.Should().Be("DM02");
+    }
+
+    [Fact]
+    public void 软件枚举的虚拟键盘不能当成外接键盘()
+    {
+        // 用户反馈（v2.5.1）：外设页「又变回显示笔记本自带键盘了」。
+        // 实测多出来的那张「键盘 HID」是 G HUB 用 logi_joy_vir_hid 虚拟出来的，
+        // 内置 PS/2 键盘其实一直被过滤着。两只键盘同时出现在页面上一定会被误解。
+        var devices = PeripheralAnalyzer.Build(RealMachineNodes());
+        var keyboards = devices.Where(d => d.Kind == PeripheralKind.Keyboard).ToList();
+
+        keyboards.Should().HaveCount(1);
+        keyboards[0].Model.Should().Be("G610");
+        keyboards.Should().NotContain(d => d.Model.Equals("HID", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    // 软件枚举器：由驱动创建，后面没有真实总线
+    [InlineData(@"LGHUBDevice\VID_046D&PID_C232\1&2d12bed1&0&01", true)]
+    [InlineData(@"ROOT\SYSTEM\0003", true)]
+    [InlineData(@"SWD\KBDVIRT\0000", true)]
+    // 真实总线：外接键鼠挂在这里，绝不能连带被排除
+    [InlineData(@"USB\VID_046D&PID_C338&MI_01\6&3758ce25&0&0001", false)]
+    [InlineData(@"BTHENUM\{00001124-0000-1000-8000-00805f9b34fb}\7&E233738", false)]
+    [InlineData(@"ACPI\MSFT0001\4&2D89D205&0", false)]
+    [InlineData(null, false)]
+    public void 只把软件枚举器下的节点判为虚拟设备(string? parent, bool expected)
+    {
+        var node = Node(@"HID\VID_046D&PID_C232\2&300BB0A1&0&0000", "Keyboard",
+            friendly: "HID Keyboard Device", hidProduct: "HID", parent: parent);
+
+        PeripheralAnalyzer.IsSoftwareEnumeratedDevice(node).Should().Be(expected);
     }
 
     [Fact]

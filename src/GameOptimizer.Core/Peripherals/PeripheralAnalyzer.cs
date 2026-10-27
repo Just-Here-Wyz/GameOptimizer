@@ -16,6 +16,10 @@ namespace GameOptimizer.Core.Peripherals;
 /// 4. 虚拟 HID 框架（VHF）会把 `HID VHF Driver` 塞进键盘列表，必须剔除。
 /// 5. 耳机只从音频端点识别。HID 消费类集合（音量键）不代表耳机，
 ///    键盘上的媒体键也会带同样的用途页。
+/// 6. 驱动**软件枚举**出来的设备同样是假的：罗技 G HUB 的
+///    `LGHUBDevice\VID_046D&PID_C232`（服务 `logi_joy_vir_hid`）会挂出一个
+///    「Logitech G HUB Virtual Keyboard」，子节点与真键盘的硬件 ID 完全一致，
+///    只靠 HID 信息分不出来，必须看父设备是不是软件枚举器。
 /// </summary>
 public static class PeripheralAnalyzer
 {
@@ -59,7 +63,7 @@ public static class PeripheralAnalyzer
 
         foreach (var node in nodes)
         {
-            if (IsTouchDevice(node) || IsVirtualDevice(node)) continue;
+            if (IsTouchDevice(node) || IsVirtualDevice(node) || IsSoftwareEnumeratedDevice(node)) continue;
 
             // 类型只由「用途页 / 设备类」这类结构化信息给出；
             // 驱动描述仅在没有结构化证据时用来解释「为什么算未知」。
@@ -401,5 +405,28 @@ public static class PeripheralAnalyzer
             || text.Contains("虚拟", StringComparison.Ordinal)
             || text.Contains("UMDF", StringComparison.OrdinalIgnoreCase)
             || text.Contains("ROOT\\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 软件枚举出来的「外设」：父设备是驱动凭空创建的，后面没有一根真实总线。
+    ///
+    /// 真机实测（2026-10-27）：装了罗技 G HUB 之后，`LGHUBDevice\VID_046D&PID_C232`
+    /// （服务 `logi_joy_vir_hid`，上游是 `ROOT\SYSTEM`）挂出一个
+    /// 「Logitech G HUB Virtual Keyboard」。它的子节点与真键盘的硬件 ID 一模一样
+    /// （`HID_DEVICE_SYSTEM_KEYBOARD` + `UP:0001_U:0006`），自报型号串还只有一个 `HID`，
+    /// 于是外设页凭空多出一张「键盘 HID」卡片 —— 用户会以为笔记本自带键盘又冒出来了。
+    /// 这种节点只能靠父设备前缀识别：软件枚举器有自己的命名空间。
+    ///
+    /// 判断用「黑名单」而不是「父设备必须是已知总线」：后者每漏一种总线，
+    /// 就会让一只真键盘从页面上消失，代价比多一张卡大得多。
+    /// </summary>
+    internal static bool IsSoftwareEnumeratedDevice(PeripheralNode node)
+    {
+        var parent = node.ParentInstanceId;
+        if (string.IsNullOrWhiteSpace(parent)) return false;
+
+        return parent.StartsWith("ROOT\\", StringComparison.OrdinalIgnoreCase)
+            || parent.StartsWith("SWD\\", StringComparison.OrdinalIgnoreCase)
+            || parent.StartsWith("LGHUBDEVICE\\", StringComparison.OrdinalIgnoreCase);
     }
 }
