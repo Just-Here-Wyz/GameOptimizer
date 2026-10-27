@@ -10,3 +10,9 @@
 
 1. 每次改动完成后，都必须创建一个对应的 Git commit，以便后续追踪和回滚。
 2. 每次改动后，都必须编写或更新相关测试，并在交付给用户前，确保所有测试和验证全部通过。
+3. **用户实际运行的是 Release 版**：桌面快捷方式指向
+   `src/GameOptimizer.App/bin/Release/net8.0-windows/GameOptimizer.App.exe`。
+   交付前必须跑 `pwsh -File tools/build-app.ps1` 原地编译这一份；
+   只编 Debug、只编到 `.artifacts`、或只提交代码，用户点开都还是旧版本，
+   界面上什么都不会变（v2.5.1 当天因此白折腾两轮）。
+   程序在运行时输出目录被锁（MSB3027），要先请用户点 × →「退出程序」再编。
