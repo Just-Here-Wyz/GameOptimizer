@@ -87,9 +87,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// 启动时的残留状态方案。<b>只读</b>：这里不还原电源计划（那一步在 App 里已经做完），
     /// 只把「还有哪些进程没恢复」接过来说明并挂到手动入口上。
     /// </param>
-    /// <param name="startupNotice">
-    /// 启动检查的一句话结论（由 <see cref="StartupRecoveryPlanner.Describe"/> 生成）。
-    /// 有内容就显示在游戏模式状态行上——<b>这就是取消启动弹窗之后唯一的交代方式</b>。
+    /// <param name="startupPowerPlanErrors">
+    /// 电源计划还原的失败项（成功时为空）。启动检查那句话要用它来区分「已还原」与「没还原」。
     /// </param>
     public MainViewModel(
         PdhSampler sampler,
@@ -100,7 +99,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         bool? elevatedOverride = null,
         CloseBehaviorService? closeBehaviorService = null,
         StartupRecoveryPlan? startupRecovery = null,
-        string? startupNotice = null)
+        IReadOnlyList<string>? startupPowerPlanErrors = null)
     {
         IsElevated = elevatedOverride ?? ElevationStatus.IsCurrentProcessElevated();
         _sampler = sampler;
@@ -196,12 +195,51 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (samplerReady) _timer.Start();
 
         // 启动检查的结论放在游戏模式状态行上：取消弹窗之后，这是唯一交代「还剩什么没处理」的地方。
-        // 记录损坏这种需要用户动手的情况标红，单纯「还有进程没恢复」保持中性灰——它不是错误。
-        if (!string.IsNullOrWhiteSpace(startupNotice))
+        // 先过一遍资格判定再算数字——已经跑起来 / 文件已删除的都不算「没恢复」，
+        // 否则状态行与按钮上的数量会比事实大（本机实测 14 条记录里 8 条其实早就回来了）。
+        if (startupRecovery is not null)
         {
-            GameModeStatus = startupNotice!;
-            if (startupRecovery?.UnreadableReason is not null) GameModePhase = GameModePhase.Failed;
+            var pruned = PrunePendingRestores();
+
+            var notice = StartupRecoveryPlanner.Describe(
+                startupRecovery with { PendingProcesses = [.. _pendingRestores] },
+                startupPowerPlanErrors);
+
+            if (pruned is not null) notice = string.IsNullOrEmpty(notice) ? pruned : notice + "；" + pruned;
+
+            if (!string.IsNullOrWhiteSpace(notice))
+            {
+                GameModeStatus = notice;
+                // 记录损坏这种要用户动手的情况才标红；「还有进程没恢复」不是错误，保持中性灰
+                if (startupRecovery.UnreadableReason is not null) GameModePhase = GameModePhase.Failed;
+            }
         }
+    }
+
+    /// <summary>
+    /// 启动时按恢复资格把遗留记录筛一遍：只留「现在真的还能恢复、而且确实还没回来」的。
+    ///
+    /// 三条会被剔掉：文件已删除 / 移动，应用商店应用，同名进程已经在跑（用户自己开回来了）。
+    /// 它们都不可能再被这个功能处理，留在记录里只会把首页那个数字永久撑大。
+    /// <b>筛完确实有变化时</b>才回写快照，并逐条把原因写进恢复日志。
+    /// </summary>
+    /// <returns>回写失败时的提示，成功或没变化时返回 null。</returns>
+    private string? PrunePendingRestores()
+    {
+        var before = _pendingRestores.Count;
+        if (before == 0) return null;
+
+        var candidates = ProcessRestorePlanner.Build(_pendingRestores);
+        var keep = candidates.Where(c => c.Eligible).Select(c => c.Record).ToList();
+        if (keep.Count == before) return null;
+
+        foreach (var skipped in candidates.Where(c => !c.Eligible))
+            ProcessRestoreLog.Write($"[遗留] {skipped.ExecutableName} · {skipped.Reason}");
+
+        _pendingRestores.Clear();
+        _pendingRestores.AddRange(keep);
+
+        return new GameModeStateStore().SavePendingProcesses(_pendingRestores);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

@@ -46,8 +46,7 @@ public class StartupRecoveryWiringTests
     {
         // 除了 UAC 那两条（用户主动授权失败要告知），OnStartup 这一路不该再有任何 MessageBox。
         // 否则等于「把弹窗从 A 挪到 B」，用户还是每次开机被拦一次。
-        var start = AppCode.IndexOf("private (StartupRecoveryPlan Plan, string Notice) RunStartupRecovery()",
-            StringComparison.Ordinal);
+        var start = AppCode.IndexOf("private (StartupRecoveryPlan Plan,", StringComparison.Ordinal);
         start.Should().BeGreaterThan(0, "启动恢复必须走 RunStartupRecovery");
 
         var end = AppCode.IndexOf("private void CreateTrayIcon()", StringComparison.Ordinal);
@@ -82,6 +81,15 @@ public class StartupRecoveryWiringTests
         MainXaml.Should().Contain("{Binding PendingRestoreText",
             "没有记录时按钮要整块收起，不能留一个空壳");
         MainVmCode.Should().Contain("private async Task OpenPendingRestoreAsync()");
+    }
+
+    [Fact]
+    public void 启动时统计的遗留数量必须先按资格筛一遍()
+    {
+        // 磁盘上的记录数 ≠ 真的还没回来：本机实测 14 条里 8 条其实早就被用户自己开回来了。
+        // 不筛就会在状态行与按钮上写一个比事实大的数字。
+        MainVmCode.Should().Contain("PrunePendingRestores()");
+        MainVmCode.Should().Contain("var candidates = ProcessRestorePlanner.Build(_pendingRestores);");
     }
 
     [Fact]

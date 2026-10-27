@@ -101,7 +101,7 @@ public partial class App : Application
             _sampler, ready, mode,
             closeBehaviorService: _closeBehavior,
             startupRecovery: startupRecovery.Plan,
-            startupNotice: startupRecovery.Notice);
+            startupPowerPlanErrors: startupRecovery.PowerPlanErrors);
         _window = new MainWindow { DataContext = _vm };
         MainWindow = _window;
 
@@ -171,7 +171,12 @@ public partial class App : Application
     /// 读不出快照、还原失败这类异常同样不弹窗，写进恢复日志并交给首页状态行说明——
     /// 但绝不静默吞掉（硬约定 1：失败必须可见）。
     /// </summary>
-    private (StartupRecoveryPlan Plan, string Notice) RunStartupRecovery()
+    /// <returns>
+    /// 启动方案 + 电源计划还原的失败项。<b>文案不在这里拼</b>：原因只有一个——
+    /// 首页还要先按资格判定筛掉「其实早就回来了」的记录，数字才对得上，
+    /// 所以那句话由 ViewModel 用同一份 <see cref="StartupRecoveryPlanner.Describe"/> 生成。
+    /// </returns>
+    private (StartupRecoveryPlan Plan, IReadOnlyList<string> PowerPlanErrors) RunStartupRecovery()
     {
         GameModeStateStore store;
         GameModeSnapshot? snapshot;
@@ -184,16 +189,14 @@ public partial class App : Application
         {
             // 兜底信息不可信：留着文件不删（不擅自清空用户数据），只把这件事说出来
             ProcessRestoreLog.Write($"[启动] 残留状态读取失败 · {ex.GetType().Name} · {ex.Message}");
-            var unreadable = StartupRecoveryPlanner.Unreadable(ex.Message);
-            return (unreadable, StartupRecoveryPlanner.Describe(unreadable));
+            return (StartupRecoveryPlanner.Unreadable(ex.Message), []);
         }
 
         var plan = StartupRecoveryPlanner.Plan(snapshot);
 
         // 只剩进程记录 = 用户上次自己选的「这次不恢复」，不是异常退出：
         // 一句话都不问，记录留着，等他哪天想起来点首页那个按钮
-        if (!plan.ShouldRestorePowerPlan)
-            return (plan, StartupRecoveryPlanner.Describe(plan));
+        if (!plan.ShouldRestorePowerPlan) return (plan, []);
 
         // 电源计划走与 PowerPlanAction 相同的 powercfg 通道（含回读验证）。
         // 只传 GUID、不带进程：这一步只还原系统状态，一个进程都不拉起。
@@ -209,20 +212,18 @@ public partial class App : Application
             errors = [$"原电源计划还原失败：{ex.Message}"];
         }
 
-        var notice = StartupRecoveryPlanner.Describe(plan, errors);
-
         if (errors.Count > 0)
         {
             // 还原没做成：快照原样保留（GUID 还在，下次启动会再试一次），只记录不打扰
             foreach (var error in errors) ProcessRestoreLog.Write("[启动] " + error);
-            return (plan, notice);
+            return (plan, errors);
         }
 
         // 还原成功：快照退化成「只剩进程」，没有剩余就整个清掉
         var saveError = store.SavePendingProcesses(plan.PendingProcesses);
-        if (saveError is not null) notice += "；" + saveError;
+        if (saveError is not null) ProcessRestoreLog.Write("[启动] " + saveError);
 
-        return (plan, notice);
+        return (plan, errors);
     }
 
     /// <summary>
