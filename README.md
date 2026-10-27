@@ -155,7 +155,7 @@ dotnet run --project src/GameOptimizer.App
 | 项 | 数据 |
 |---|---|
 | 开发周期 | 2026-10-19 ~ 10-22，**4 天完成主体功能**（36 次提交） |
-| 提交与版本 | `v0.5.0` → **v2.5.2**，**18 个版本 tag**；每个 `v*` tag 由 CI 打包并附到 Release |
+| 提交与版本 | `v0.5.0` → **v2.5.2**，**18 个版本 tag**；v2.5.2 起每个 `v*` tag 由 CI 打包并把产物附到 Release（更早的 tag 是手工出的包，不保证有附件） |
 | 代码量 | C# **31,411 行 / 167 个文件**（src + tests，不含生成代码）+ XAML 2,585 行 / 6 个文件 |
 | 测试 | **933 个 xUnit 用例**，只引用 `GameOptimizer.Core`，不引入 UI 依赖；少量用例会读真实系统（进程列表 / 电源计划 / 性能计数器）做一致性校验 |
 | 持续集成 | GitHub Actions（`windows-latest`）：推送 `main` 与打 `v*` tag 时还原 → Release 构建 → 跑全量用例，失败会把用例名写进 Actions 摘要 |
