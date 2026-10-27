@@ -52,7 +52,7 @@ pwsh -File installer\build-installer.ps1                      # 单文件 exe + 
 - 版本号**不要手改**：跑 `pwsh -File tools\bump-version.ps1 -Kind fix|feature|major`，
   它会同步 `Directory.Build.props`、测试断言、文档标题与两份 README
   （规则见 [docs/03-版本规则](docs/03-版本规则.md)）。
-- 源码推送 `main` 会触发 CI（`windows-latest`：Release 构建 + 926 例测试）；
+- 源码推送 `main` 会触发 CI（`windows-latest`：Release 构建 + 933 例测试）；
   打 `v*` tag 会额外触发 Release 工作流，自动打包单文件 exe 与安装包并附到 Release 上。
 - **不要提交** `publish/`、`bin/`、`obj/` 与任何运行时产物，`.gitignore` 已经挡住；也不要提交凭据。
 
