@@ -1,0 +1,138 @@
+name: Release
+
+# 打 v* tag 就出包并挂到 Release 上：单文件 exe + Inno Setup 安装包 + 本版 SHA256SUMS。
+#
+# 为什么要有这一条：v2.5.0 的源码打过 tag，但产物没上传，README 里的下载链接
+# 指向一个没有任何附件的 tag 页——「tag ≠ 可下载」。现在把这一步交给 CI，
+# 只要 tag 是绿的，附件就一定在。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（必须已存在，且与 Directory.Build.props 的版本一致）'
+        required: true
+
+# 发 Release 与上传附件都要 contents 写权限
+permissions:
+  contents: write
+
+# 发布不能并发覆盖：两次同时上传同一个 tag 会互相把附件顶掉
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: 打包并发布（Windows x64）
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      # 版本号只有一个真源（Directory.Build.props）。tag 与它不一致时立刻停，
+      # 免得打出一个「文件名写 2.5.3、程序里还是 2.5.2」的包。
+      - name: 校验 tag 与版本号一致
+        shell: pwsh
+        run: |
+          $m = Select-String -Path Directory.Build.props -Pattern '<Version>([^<]+)</Version>'
+          if (-not $m) { throw 'Directory.Build.props 里找不到 <Version>' }
+          $version = $m.Matches[0].Groups[1].Value.Trim()
+          $tag = $env:TAG
+          Write-Host "props=$version tag=$tag"
+          if ("v$version" -ne $tag) { throw "tag $tag 与源码版本 v$version 不一致" }
+
+      # 官方 windows-latest 镜像自带 Inno Setup 6；万一哪天没了，用 choco 补一个
+      - name: 确保 Inno Setup 可用
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ }
+
+          if ($candidates) { Write-Host "找到 ISCC：$($candidates[0])"; exit 0 }
+
+          Write-Host '未找到 Inno Setup，尝试用 Chocolatey 安装'
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw '安装 Inno Setup 失败' }
+
+      # 这一条命令就是本地那套流程：构建 → 跑全量用例 → 单文件自包含发布 →
+      # ISCC 编译安装包 → 校验产物 → 刷新 SHA256SUMS.txt
+      - name: 打包（单文件 exe + 安装包）
+        shell: pwsh
+        run: pwsh -File installer/build-installer.ps1
+
+      # 仓库里的 SHA256SUMS.txt 累积了历史版本；Release 附件只放本版两个文件，
+      # 否则下载的人会看到一堆与自己无关的校验值。
+      - name: 生成本版校验文件
+        shell: pwsh
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          $src = 'publish/win-x64/SHA256SUMS.txt'
+          $want = @(
+            "GameOptimizer-v$version-win-x64.exe",
+            "GameOptimizer-Setup-v$version.exe"
+          )
+          $lines = Get-Content $src | Where-Object {
+            $name = ($_ -split '\*')[-1].Trim()
+            $want -contains $name
+          }
+          if ($lines.Count -ne $want.Count) {
+            throw "SHA256SUMS.txt 里缺少本版产物，期望 $($want.Count) 行，实际 $($lines.Count) 行"
+          }
+          $lines | Set-Content 'publish/win-x64/SHA256SUMS-release.txt' -Encoding utf8
+          $lines | ForEach-Object { Write-Host $_ }
+
+      # 已存在就不重建（避免把手工写好的发布说明冲掉），只把附件补/覆盖上去
+      - name: 创建或复用 Release
+        shell: pwsh
+        run: |
+          gh release view $env:TAG --json tagName 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG --title "游戏优化助手 $env:TAG" --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw '创建 Release 失败' }
+          } else {
+            Write-Host "Release $env:TAG 已存在，只上传附件"
+          }
+
+      - name: 上传附件
+        shell: pwsh
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          gh release upload $env:TAG `
+            "publish/win-x64/GameOptimizer-v$version-win-x64.exe" `
+            "publish/win-x64/GameOptimizer-Setup-v$version.exe" `
+            "publish/win-x64/SHA256SUMS-release.txt#SHA256SUMS.txt" `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw '上传附件失败' }
+
+      # 出包过程的日志与产物留档：失败时能直接看到是哪一步挂的
+      - name: 上传产物留档
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-${{ inputs.tag || github.ref_name }}
+          path: |
+            publish/win-x64/GameOptimizer-v*.exe
+            publish/win-x64/GameOptimizer-Setup-v*.exe
+            publish/win-x64/SHA256SUMS*.txt
+          if-no-files-found: warn
+          retention-days: 7
