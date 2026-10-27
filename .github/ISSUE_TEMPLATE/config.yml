@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 先看「已知限制」
+    url: https://github.com/Just-Here-Wyz/GameOptimizer/blob/main/docs/04-%E5%B7%B2%E7%9F%A5%E9%99%90%E5%88%B6.md
+    about: 温度监控、游戏内悬浮窗 / 帧率、加驱与改系统服务都是明确不做的项，写在文档里。
+  - name: 构建与调试说明
+    url: https://github.com/Just-Here-Wyz/GameOptimizer/blob/main/docs/05-%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.md
+    about: 想自己编译、或者看离屏渲染怎么出截图，看这份。

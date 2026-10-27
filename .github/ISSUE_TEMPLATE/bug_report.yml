@@ -1,0 +1,81 @@
+name: 问题反馈 / Bug report
+description: 界面数字不对、某个功能没生效、程序报错或崩溃
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个工具的原则是「读不到就说读不到」，所以定位问题很依赖现场信息。
+        下面几项请尽量填全，尤其是**版本号**和**恢复日志**。
+
+  - type: input
+    id: version
+    attributes:
+      label: 程序版本
+      description: 设置页底部或左下角显示的版本号（如 v2.5.2）
+      placeholder: v2.5.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: elevation
+    attributes:
+      label: 是否以管理员身份运行
+      description: 程序声明了 requireAdministrator，正常启动会弹 UAC。点了「否」很多功能会失败。
+      options:
+        - 是（UAC 点了「是」）
+        - 否（UAC 点了「否」，界面顶部有黄色提示条）
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: 系统与硬件
+      description: Windows 版本、CPU 型号、显卡型号（核显 / 独显）
+      placeholder: Windows 11 23H2 · i7-13700H · RTX 4060 Laptop
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 你看到什么、期望看到什么。涉及数字不对时请写清「界面显示 X，实际是 Y」
+      placeholder: |
+        例：总览页显存显示 1204 / 8182 MB，任务管理器里这块显卡是 8 GB，
+        但显存占用明显不止 1.2 GB。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 启动程序
+        2. 点「开启游戏模式」
+        3. 关闭后弹窗里取消恢复
+        4. 重启程序，期望不再弹「恢复」询问窗
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: 恢复日志（如果涉及游戏模式 / 后台进程）
+      description: 文件在 `%LocalAppData%\GameOptimizer\restore-log.txt`，把最后 30 行贴进来即可。**贴之前请删掉里面出现的本机用户名或软件路径**。
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我看过 docs/04-已知限制.md，这个不是那里写明的「做不到」
+          required: true
+        - label: 我没有在内容里粘贴访问令牌、密码等凭据
+          required: true
