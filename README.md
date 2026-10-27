@@ -4,7 +4,7 @@
 [![version](https://img.shields.io/github/v/tag/Just-Here-Wyz/GameOptimizer?label=version&color=4C8DFF)](https://github.com/Just-Here-Wyz/GameOptimizer/releases)
 [![license](https://img.shields.io/github/license/Just-Here-Wyz/GameOptimizer?color=4C8DFF)](LICENSE)
 
-> **v2.5.1** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
+> **v2.5.2** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
 
 [完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
 
@@ -112,7 +112,7 @@ dotnet run --project src/GameOptimizer.App
 > v2.0.0 起程序声明 `requireAdministrator`，启动会弹 UAC。
 > 内存清理、电源计划、结束高权限进程都需要管理员权限。
 
-> **版本状态**：源码 **v2.5.1**，最近发布 v2.5.0（2026-10-26）。
+> **版本状态**：源码 **v2.5.2**，最近发布 v2.5.0（2026-10-26）。
 > 版本号按 [版本规则](docs/03-版本规则.md) 自动推进；下载链接与这一行只在真的打包上传、建成 Release 之后才换。
 
 ## 界面

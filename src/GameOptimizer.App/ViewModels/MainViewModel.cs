@@ -50,6 +50,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// </summary>
     private readonly ProcessRestoreRunner _processRestore = new();
 
+    /// <summary>
+    /// 启动时读到的遗留恢复记录（只含「还有可能按原路径恢复」的那些）。
+    ///
+    /// v2.5.2 起启动不再弹窗询问，这批记录就由这张列表持有，
+    /// 靠首页游戏模式卡片上的「恢复遗留进程」手动处理：
+    /// 点之前一个进程都不会被拉起，取消之后记录原样留着。
+    /// </summary>
+    private readonly List<RestoredProcess> _pendingRestores = [];
+
+    /// <summary>手动恢复是否正在执行：模态窗口已经挡了一层，这里再防一次重入。</summary>
+    private bool _pendingRestoreBusy;
+
     /// <summary>已安装游戏的 exe 主名，用于把游戏本体排除在「可结束」候选之外。</summary>
     private IReadOnlySet<string> _gameStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -71,6 +83,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// 设置页改完只是写进了磁盘，关闭流程手里的还是旧值，要重启才生效。
     /// 离屏渲染会传临时文件，避免截图过程改动使用者真实的配置。
     /// </param>
+    /// <param name="startupRecovery">
+    /// 启动时的残留状态方案。<b>只读</b>：这里不还原电源计划（那一步在 App 里已经做完），
+    /// 只把「还有哪些进程没恢复」接过来说明并挂到手动入口上。
+    /// </param>
+    /// <param name="startupNotice">
+    /// 启动检查的一句话结论（由 <see cref="StartupRecoveryPlanner.Describe"/> 生成）。
+    /// 有内容就显示在游戏模式状态行上——<b>这就是取消启动弹窗之后唯一的交代方式</b>。
+    /// </param>
     public MainViewModel(
         PdhSampler sampler,
         bool samplerReady,
@@ -78,7 +98,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         DownloadStore? downloadStore = null,
         BackgroundWhitelistStore? whitelistStore = null,
         bool? elevatedOverride = null,
-        CloseBehaviorService? closeBehaviorService = null)
+        CloseBehaviorService? closeBehaviorService = null,
+        StartupRecoveryPlan? startupRecovery = null,
+        string? startupNotice = null)
     {
         IsElevated = elevatedOverride ?? ElevationStatus.IsCurrentProcessElevated();
         _sampler = sampler;
@@ -91,6 +113,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // 与 App.OnWindowClosing 共用同一个 service，改完立刻对下一次点 × 生效。
         CloseBehaviorSettings = new CloseBehaviorSettingsViewModel(
             closeBehaviorService ?? new CloseBehaviorService());
+
+        // 启动时的遗留记录：这里只接管「还有哪些进程没恢复」，
+        // 电源计划那一步已经在 App.RunStartupRecovery 里还原完了，VM 不重复碰系统状态。
+        if (startupRecovery is not null) _pendingRestores.AddRange(startupRecovery.PendingProcesses);
 
         // 下载器（v2.2.0）：服务本身在 Core，这里只建一个实例并交给下载页的 ViewModel。
         // 下载与采集互不影响：上传/下载不动 PDH 计数器，共用事件循环也不会互相拖慢。
@@ -123,6 +149,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // 后台进程管理（v2.4）：总览页只留入口，全部进程挪进独立浮窗。
         // 浮窗由 View 层创建（VM 不碰 Window），这里只发一个请求事件。
         OpenBackgroundManagerCommand = new RelayCommand(_ => OpenBackgroundManager());
+
+        // 遗留恢复记录的手动入口（v2.5.2）：启动不再弹窗询问，改由用户自己点。
+        // 没有遗留记录时按钮整块隐藏（见 MainWindow.xaml 的绑定），不会留一个空壳入口。
+        OpenPendingRestoreCommand = new RelayCommand(
+            _ => _ = OpenPendingRestoreAsync(),
+            _ => HasPendingRestores && !_pendingRestoreBusy);
         RescanBackgroundCommand = new RelayCommand(_ => LoadBackgroundProcesses());
         SaveBackgroundListCommand = new RelayCommand(_ => SaveBackgroundList());
         ProtectAllBackgroundCommand = new RelayCommand(_ => SetAllProtected(true));
@@ -162,6 +194,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _ = RefreshPeripheralsAsync();
 
         if (samplerReady) _timer.Start();
+
+        // 启动检查的结论放在游戏模式状态行上：取消弹窗之后，这是唯一交代「还剩什么没处理」的地方。
+        // 记录损坏这种需要用户动手的情况标红，单纯「还有进程没恢复」保持中性灰——它不是错误。
+        if (!string.IsNullOrWhiteSpace(startupNotice))
+        {
+            GameModeStatus = startupNotice!;
+            if (startupRecovery?.UnreadableReason is not null) GameModePhase = GameModePhase.Failed;
+        }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -254,6 +294,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>总览页「管理后台进程」：请求打开独立的保护浮窗（由 View 层实现）。</summary>
     public RelayCommand OpenBackgroundManagerCommand { get; }
+
+    /// <summary>
+    /// 总览页「恢复遗留进程」（v2.5.2）：处理上一次没恢复完的后台进程。
+    /// 这是取消启动弹窗之后<b>唯一</b>的手动恢复入口，没有可恢复记录时按钮不显示。
+    /// </summary>
+    public RelayCommand OpenPendingRestoreCommand { get; }
 
     /// <summary>重新扫描本机后台进程（浮窗里的「刷新」）。</summary>
     public RelayCommand RescanBackgroundCommand { get; }
@@ -1911,7 +1957,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var count = viewModel.Selection.EligibleCount;
             GameModeStatus = restored
                 ? "游戏模式：已关闭（恢复结果未知，详见日志）"
-                : $"游戏模式：已关闭，未恢复后台进程（{count} 项留在记录里，下次启动仍可处理）";
+                : $"游戏模式：已关闭，未恢复后台进程（{count} 项留在记录里，可在首页「恢复遗留进程」里处理）";
             GameModePhase = GameModePhase.Idle;
         }
         else
@@ -1921,10 +1967,157 @@ public sealed class MainViewModel : INotifyPropertyChanged
             GameModePhase = report.FailedCount > 0 ? GameModePhase.Failed : GameModePhase.Idle;
         }
 
-        // 快照只留「还没恢复的」：全部成功就清掉；取消或部分失败则保留，下次启动接着还原。
-        // 写失败只作为提醒追加一句，不能把已完成的关闭流程判成失败。
+        // 快照只留「还没恢复的」：全部成功就清掉；取消或部分失败则保留。
+        // v2.5.2 起保留的记录不再指望「下次启动弹窗提醒」，而是立刻挂到首页的手动入口上。
         var snapshotError = await Task.Run(() => _gameMode.SyncPendingRestoreSnapshot());
         if (snapshotError is not null) GameModeStatus += "；" + snapshotError;
+
+        // 只收「本来能恢复却还没恢复」的那些：文件已删除 / 已在运行这类跳过项
+        // 永远恢复不了，收进来只会让首页那个按钮永远消不掉（见 StartupRecoveryPlanner 的同类取舍）
+        AdoptPendingRestores(exit.Candidates
+            .Where(c => c.Eligible)
+            .Select(c => c.Record));
+    }
+
+    /// <summary>
+    /// 把「关闭游戏模式后还剩谁没回来」交给首页的手动入口。
+    /// 与写盘各管一头：写盘保证下次启动还看得见，这里保证这次就知道还剩几个。
+    /// </summary>
+    private void AdoptPendingRestores(IEnumerable<RestoredProcess> records)
+    {
+        _pendingRestores.Clear();
+        _pendingRestores.AddRange(records.Where(r => !r.Launched || r.Failed));
+
+        OnPropertyChanged(nameof(HasPendingRestores));
+        OnPropertyChanged(nameof(PendingRestoreText));
+        OnPropertyChanged(nameof(PendingRestoreButtonText));
+    }
+
+    /// <summary>
+    /// 是否还有遗留的未恢复记录。决定首页游戏模式卡片上那个按钮显不显示。
+    /// </summary>
+    public bool HasPendingRestores => _pendingRestores.Count > 0;
+
+    /// <summary>
+    /// 按钮的显示开关：空串表示收起（复用 <c>StringToVisibility</c>，与「未提权提示」同一套）。
+    /// 用一个字符串而不是 bool，是为了让「有没有记录」这件事在界面上同时能给文案。
+    /// </summary>
+    public string PendingRestoreText
+        => HasPendingRestores ? $"{_pendingRestores.Count} 个后台进程未恢复" : "";
+
+    public string PendingRestoreButtonText => $"恢复遗留进程（{_pendingRestores.Count}）";
+
+    /// <summary>
+    /// 打开「选择需要恢复的后台进程」窗口处理上一次留下的记录（v2.5.2）。
+    ///
+    /// 这是启动询问弹窗被取消之后<b>唯一</b>的手动恢复入口，语义与关闭游戏模式时的那个窗口完全一致：
+    /// 勾选 → 恢复所选才会启动进程；取消 / 关窗 = 什么都不做，记录原样留着下次再看到。
+    /// 因此「不弹窗」不等于「自动恢复」，也不等于「恢复成功」。
+    /// </summary>
+    private async Task OpenPendingRestoreAsync()
+    {
+        if (_pendingRestoreBusy || _pendingRestores.Count == 0) return;
+
+        // 开着游戏模式时不做恢复：这些记录来自上一次会话，
+        // 此刻把程序拉起来等于和游戏模式对着干。说清原因，不做一个点不动的死按钮。
+        if (IsGameModeOn || IsGameModeToggling)
+        {
+            GameModeStatus = "游戏模式：先关闭游戏模式，再来处理遗留的恢复记录";
+            GameModePhase = GameModePhase.Idle;
+            return;
+        }
+
+        // 资格判定要读每个 exe 的版本资源与进程表，放到后台线程，
+        // 否则 14 条记录就是 14 次文件读取压在 UI 线程上（与关闭游戏模式时同一考量）
+        var candidates = await Task.Run(() => ProcessRestorePlanner.Build(_pendingRestores));
+
+        if (candidates.Count == 0)
+        {
+            // 记录在、但没有一条能翻译成候选：说明快照本身是坏的，如实说，别装作处理完了
+            GameModeStatus = "游戏模式：遗留的恢复记录里没有可用条目";
+            GameModePhase = GameModePhase.Idle;
+            return;
+        }
+
+        if (!candidates.Any(c => c.Eligible))
+        {
+            // 一个都恢复不了就别弹一个全是灰条的窗口，首页说一句、明细进日志
+            foreach (var skipped in candidates)
+                ProcessRestoreLog.Write($"[遗留] {skipped.ExecutableName} · {skipped.Reason}");
+
+            // 顺手把这几条清掉：它们指向的文件已经没了 / 是包应用 / 已在运行，
+            // 永远恢复不了，留着只会让按钮永远挂在那里反复提醒（硬约定：无效记录不反复打扰）
+            var pruneError = SyncPendingRestores(candidates);
+
+            GameModeStatus = $"游戏模式：{candidates.Count} 项遗留进程都无法自动恢复（原因已写入日志）";
+            GameModePhase = GameModePhase.Idle;
+            if (pruneError is not null) GameModeStatus += "；" + pruneError;
+            return;
+        }
+
+        // 没有界面（离屏渲染 / 窗口已销毁）：不弹窗，也绝不偷偷把进程全恢复
+        if (RestoreSelectionRequested is null)
+        {
+            GameModeStatus = "游戏模式：界面不可用，遗留恢复记录已原样保留";
+            return;
+        }
+
+        _pendingRestoreBusy = true;
+        OpenPendingRestoreCommand.RaiseCanExecuteChanged();
+
+        try
+        {
+            var viewModel = new ProcessRestoreViewModel(candidates, _processRestore);
+            var request = new ProcessRestoreRequest(viewModel);
+            RestoreSelectionRequested.Invoke(this, request);
+            await request.Completion;
+
+            // 无论恢复完成、部分失败还是取消，都要把「还剩谁」写回记录：
+            // 全都回来了就清空快照，没回来的继续留着——同一个入口下次还在
+            var saveError = SyncPendingRestores(candidates);
+
+            var report = viewModel.Report;
+            GameModeStatus = report is null
+                ? $"游戏模式：遗留记录未处理（{_pendingRestores.Count} 项仍在记录里）"
+                : $"游戏模式：遗留记录处理完成，{report.SummaryAgainst(candidates.Count)}";
+            GameModePhase = report?.FailedCount > 0 ? GameModePhase.Failed : GameModePhase.Idle;
+
+            if (saveError is not null) GameModeStatus += "；" + saveError;
+        }
+        finally
+        {
+            _pendingRestoreBusy = false;
+            OpenPendingRestoreCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// 把「还没成功恢复、且仍然值得保留」的记录写回快照，并刷新首页按钮。
+    ///
+    /// 保留条件只有一条：<b>这次能恢复、但还没恢复成功</b>。
+    /// 跳过项（文件已删除 / 应用商店应用 / 已在运行）直接丢掉——它们永远恢复不了，
+    /// 留在记录里等于造一个永远降不到 0 的数字，也就是「反复提醒」的根源。
+    ///
+    /// 写盘失败只作为界面提示返回，绝不抛出：这次恢复该做的已经做完了。
+    /// </summary>
+    private string? SyncPendingRestores(IReadOnlyList<ProcessRestoreCandidate> candidates)
+    {
+        var remaining = candidates
+            .Where(c => c.Eligible && (!c.Record.Launched || c.Record.Failed))
+            .Select(c => c.Record)
+            .ToList();
+
+        _pendingRestores.Clear();
+        _pendingRestores.AddRange(remaining);
+
+        // 与关闭游戏模式那条链路共用一处落盘语义（见 GameModeStateStore.SavePendingProcesses）
+        var error = new GameModeStateStore().SavePendingProcesses(_pendingRestores);
+
+        OnPropertyChanged(nameof(HasPendingRestores));
+        OnPropertyChanged(nameof(PendingRestoreText));
+        OnPropertyChanged(nameof(PendingRestoreButtonText));
+
+        return error;
     }
 
     /// <summary>

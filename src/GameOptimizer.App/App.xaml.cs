@@ -83,7 +83,7 @@ public partial class App : Application
             return;
         }
 
-        RecoverFromAbnormalExit();
+        var startupRecovery = RunStartupRecovery();
 
         // 关闭行为：启动时读一次盘。读不出来就是「每次询问」，原因留给设置页显示，
         // 绝不因为一个坏掉的配置让程序起不来，也绝不替用户猜「退出」还是「缩到托盘」。
@@ -97,7 +97,11 @@ public partial class App : Application
 
         // 设置页与关闭流程共用同一个 service：各建一个实例的话，
         // 设置页改完只是写进了磁盘，关闭流程手里的还是旧值，要重启才生效。
-        _vm = new MainViewModel(_sampler, ready, mode, closeBehaviorService: _closeBehavior);
+        _vm = new MainViewModel(
+            _sampler, ready, mode,
+            closeBehaviorService: _closeBehavior,
+            startupRecovery: startupRecovery.Plan,
+            startupNotice: startupRecovery.Notice);
         _window = new MainWindow { DataContext = _vm };
         MainWindow = _window;
 
@@ -150,10 +154,24 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 崩溃 / 任务管理器强杀后的兜底：检测残留快照并询问是否还原。
-    /// 选「否」保留快照，下次启动再问，直到用户处理掉。
+    /// 启动时处理上一次留下的游戏模式状态。<b>这条路径永远不弹窗。</b>
+    ///
+    /// v2.4.1 ~ v2.5.1 这里会用「游戏优化助手 — 恢复」问「上次关闭游戏模式后还有 N 个后台进程
+    /// 没有恢复，是否现在恢复？」。选「否」就保留快照、下次启动再问——于是每一次开机
+    /// 都要重新回答一个用户在上次关闭游戏模式时已经做过的决定。
+    ///
+    /// 现在只做两件必须做的事，两件事都不需要用户点头：
+    /// <list type="number">
+    /// <item>崩溃 / 强杀留下的<b>电源计划</b>必须还原——那是程序留在系统上的改动，
+    /// 不是用户的待办，留着不问等于让系统永远停在高性能；</item>
+    /// <item>未恢复的<b>进程记录</b>原样保留，交给首页「恢复遗留进程」手动处理：
+    /// 不自动拉起（不替用户决定），也不清空（不丢掉有效记录）。</item>
+    /// </list>
+    ///
+    /// 读不出快照、还原失败这类异常同样不弹窗，写进恢复日志并交给首页状态行说明——
+    /// 但绝不静默吞掉（硬约定 1：失败必须可见）。
     /// </summary>
-    private void RecoverFromAbnormalExit()
+    private (StartupRecoveryPlan Plan, string Notice) RunStartupRecovery()
     {
         GameModeStateStore store;
         GameModeSnapshot? snapshot;
@@ -161,64 +179,50 @@ public partial class App : Application
         {
             store = new GameModeStateStore();
             snapshot = store.Load();
-            if (snapshot is null) return;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
-                $"上次运行残留的游戏模式状态无法读取，请手动确认电源计划：\n{ex.Message}",
-                "游戏优化助手 — 残留状态",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            // 兜底信息不可信：留着文件不删（不擅自清空用户数据），只把这件事说出来
+            ProcessRestoreLog.Write($"[启动] 残留状态读取失败 · {ex.GetType().Name} · {ex.Message}");
+            var unreadable = StartupRecoveryPlanner.Unreadable(ex.Message);
+            return (unreadable, StartupRecoveryPlanner.Describe(unreadable));
         }
 
-        var planMention = string.IsNullOrWhiteSpace(snapshot.PreviousPowerPlanGuid)
-            ? ""
-            : "电源计划";
-        var count = snapshot.Killed?.Count(k => !string.IsNullOrWhiteSpace(k.LaunchPath)) ?? 0;
-        var items = new List<string>();
-        if (planMention.Length > 0) items.Add(planMention);
-        if (count > 0) items.Add($"{count} 个进程");
-        var what = items.Count > 0 ? string.Join("和", items) : "上次的改动";
+        var plan = StartupRecoveryPlanner.Plan(snapshot);
 
-        // 没有电源计划、只剩进程 = 「上次关闭游戏模式后被跳过/取消的恢复」，
-        // 不是异常退出。措辞必须分清，否则用户会以为程序崩过。
-        var question = planMention.Length > 0
-            ? $"上次程序未正常退出，检测到 {what} 未还原，是否现在还原？"
-            : $"上次关闭游戏模式后还有 {count} 个后台进程没有恢复，是否现在恢复？";
+        // 只剩进程记录 = 用户上次自己选的「这次不恢复」，不是异常退出：
+        // 一句话都不问，记录留着，等他哪天想起来点首页那个按钮
+        if (!plan.ShouldRestorePowerPlan)
+            return (plan, StartupRecoveryPlanner.Describe(plan));
 
-        var answer = MessageBox.Show(
-            question,
-            "游戏优化助手 — 恢复",
-            MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes) return; // 保留快照，下次启动再问
+        // 电源计划走与 PowerPlanAction 相同的 powercfg 通道（含回读验证）。
+        // 只传 GUID、不带进程：这一步只还原系统状态，一个进程都不拉起。
+        IReadOnlyList<string> errors;
+        try
+        {
+            errors = new GameModeRecovery().Restore(
+                new GameModeSnapshot { PreviousPowerPlanGuid = plan.PowerPlanGuid },
+                PowerPlanAction.RestorePlan);
+        }
+        catch (Exception ex)
+        {
+            errors = [$"原电源计划还原失败：{ex.Message}"];
+        }
 
-        // 还原：电源计划走与 PowerPlanAction 相同的 powercfg 通道（含回读验证），
-        // 进程用 GameModeRecovery 按原路径拉起——它内部会先过一遍恢复资格判定，
-        // 文件已删除、应用商店应用这类目标一律跳过并说明原因，不硬启动。
-        var recovery = new GameModeRecovery();
-        var errors = recovery.Restore(snapshot, PowerPlanAction.RestorePlan);
+        var notice = StartupRecoveryPlanner.Describe(plan, errors);
 
         if (errors.Count > 0)
         {
-            // 还原没做完：保留快照，下次启动继续问
-            MessageBox.Show(
-                "还原未完成，请手动确认：\n" + string.Join("\n", errors),
-                "游戏优化助手 — 还原未完成",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            // 还原没做成：快照原样保留（GUID 还在，下次启动会再试一次），只记录不打扰
+            foreach (var error in errors) ProcessRestoreLog.Write("[启动] " + error);
+            return (plan, notice);
         }
 
-        // 跳过项不算「没还原完」（否则快照永远清不掉），但也要让用户知道哪些没回来
-        if (recovery.Skipped.Count > 0)
-        {
-            MessageBox.Show(
-                "以下项目无法自动恢复，已跳过：\n" + string.Join("\n", recovery.Skipped),
-                "游戏优化助手 — 部分未恢复",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-        }
+        // 还原成功：快照退化成「只剩进程」，没有剩余就整个清掉
+        var saveError = store.SavePendingProcesses(plan.PendingProcesses);
+        if (saveError is not null) notice += "；" + saveError;
 
-        store.Clear();
+        return (plan, notice);
     }
 
     /// <summary>

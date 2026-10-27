@@ -62,6 +62,55 @@ public sealed class GameModeStateStore
         File.WriteAllText(_path, JsonSerializer.Serialize(snapshot, JsonOptions));
     }
 
+    /// <summary>
+    /// 按「还没恢复的进程」重写快照：还有剩余就只留这些，全都恢复了就删掉。
+    ///
+    /// 这是「快照 = 未恢复的进程记录」这个语义的<b>唯一</b>落盘处，
+    /// 关闭游戏模式后的同步与首页的手动恢复都走它，避免两处各写一份迟早走样。
+    ///
+    /// 只认<b>真正还没恢复成功</b>的记录（<see cref="RestoredProcess.Launched"/> 为 false，
+    /// 或试过但失败）——调用方多传了已恢复的也不会写进去。
+    ///
+    /// 电源计划字段一律置空：调用它的时候那一步已经还原，
+    /// 留着旧 GUID 会让下次启动按一份过期计划把用户的电源设置再改一遍。
+    ///
+    /// 任何失败只作为返回值上报，<b>绝不抛出</b>：此时该关的都关完了，
+    /// 不能因为写不进一个兜底文件就把已完成的流程判成失败。
+    /// </summary>
+    public string? SavePendingProcesses(IEnumerable<RestoredProcess>? pending)
+    {
+        try
+        {
+            var records = (pending ?? [])
+                .Where(r => r is not null
+                            && !string.IsNullOrWhiteSpace(r.LaunchPath)
+                            && (!r.Launched || r.Failed))
+                .ToList();
+
+            if (records.Count == 0)
+            {
+                Clear();
+                return null;
+            }
+
+            Save(new GameModeSnapshot
+            {
+                PreviousPowerPlanGuid = null,
+                Killed = [.. records.Select(r => new GameModeKilledProcess
+                {
+                    Name = r.Name,
+                    LaunchPath = r.LaunchPath,
+                })],
+            });
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"未恢复进程的兜底记录没写成功（{ex.Message}），下次启动可能看不到遗留记录";
+        }
+    }
+
     /// <summary>清除快照。文件已不存在时静默；写入类失败抛异常。</summary>
     public void Clear()
     {

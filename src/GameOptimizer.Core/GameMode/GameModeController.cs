@@ -785,34 +785,14 @@ public sealed class GameModeController
     {
         if (_stateStore is null) return null;
 
-        try
-        {
-            var source = _actions.OfType<IProcessRestoreSource>().FirstOrDefault();
-            var pending = source?.PendingRestores ?? [];
+        var pending = _actions.OfType<IProcessRestoreSource>().FirstOrDefault()?.PendingRestores ?? [];
+        var error = _stateStore.SavePendingProcesses(pending);
 
-            if (pending.Count == 0)
-            {
-                _stateStore.Clear();
-                _stateSaved = false;
-                return null;
-            }
+        // 写成功后才更新标记；写失败时快照内容未知，下一次仍按「有快照」处理。
+        // 有剩余才允许「干净退出时顺手清快照」，不能凭调用方手里那份列表猜。
+        if (error is null) _stateSaved = _stateStore.Exists();
 
-            // 电源计划在这一步之前已经还原，快照里不能再留着旧 GUID，
-            // 否则下次启动会按一份过期计划把用户的电源设置再改一遍
-            var snapshot = new GameModeSnapshot
-            {
-                PreviousPowerPlanGuid = null,
-                Killed = [.. pending.Select(r => new GameModeKilledProcess { Name = r.Name, LaunchPath = r.LaunchPath })],
-            };
-
-            _stateStore.Save(snapshot);
-            _stateSaved = true;
-            return null;
-        }
-        catch (Exception ex)
-        {
-            return $"未恢复进程的兜底记录没写成功（{ex.Message}），下次启动可能不会提示还原";
-        }
+        return error;
     }
 
     /// <summary>干净退出后清除兜底快照；清除失败保留快照（下次启动提示，好过无声丢档）。</summary>

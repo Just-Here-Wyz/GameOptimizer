@@ -50,13 +50,13 @@ public class VersionConsistencyTests
     }
 
     [Fact]
-    public void 当前版本应为2_5_1()
+    public void 当前版本应为2_5_2()
     {
         // 版本号按 docs/03-版本规则.md 的规则自动推进（tools/bump-version.ps1 同步此处）。
         // 保留这条硬断言：改了 props 却漏掉某个文件时，这里第一个变红。
         AssemblyVersion.Major.Should().Be(2);
         AssemblyVersion.Minor.Should().Be(5);
-        AssemblyVersion.Build.Should().Be(1);
+        AssemblyVersion.Build.Should().Be(2);
     }
 
     [Fact]

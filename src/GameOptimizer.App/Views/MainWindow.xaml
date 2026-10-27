@@ -325,6 +325,17 @@
                                             -->
                                             <TextBlock Text="{Binding BackgroundSummaryText}" Style="{StaticResource Faint}"
                                                        TextWrapping="Wrap" Margin="0,3,16,0"/>
+
+                                            <!--
+                                              遗留恢复记录的手动入口（v2.5.2）。
+                                              启动时不再弹窗问「还有 N 个进程没恢复」，记录挂在这里等用户自己点；
+                                              没有记录时整块收起（空串 → Collapsed），不留一个空壳按钮。
+                                            -->
+                                            <Button Content="{Binding PendingRestoreButtonText}"
+                                                    Command="{Binding OpenPendingRestoreCommand}"
+                                                    Visibility="{Binding PendingRestoreText, Converter={StaticResource StringToVisibility}}"
+                                                    HorizontalAlignment="Left" Padding="12,4" Margin="0,8,16,0"
+                                                    ToolTip="上次关闭游戏模式后没有恢复的后台进程；点这里勾选要恢复哪些，不会再在启动时弹窗询问"/>
                                         </StackPanel>
                                         <Button Grid.Column="1" Content="管理后台进程"
                                                 Command="{Binding OpenBackgroundManagerCommand}"
