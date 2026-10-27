@@ -19,6 +19,8 @@ public class CloseBehaviorWiringTests
         Read("src", "GameOptimizer.App", "ViewModels", "CloseBehaviorPromptViewModel.cs");
     private static string PromptXaml => Read("src", "GameOptimizer.App", "Views", "CloseBehaviorWindow.xaml");
     private static string MainXaml => Read("src", "GameOptimizer.App", "Views", "MainWindow.xaml");
+    private static string SettingsViewModelCode =>
+        Read("src", "GameOptimizer.App", "ViewModels", "CloseBehaviorSettingsViewModel.cs");
 
     [Fact]
     public void 关闭事件必须按三种结论分流()
@@ -89,6 +91,15 @@ public class CloseBehaviorWiringTests
         MainXaml.Should().Contain("{Binding CloseBehaviorSettings.IsAskSelected");
         MainXaml.Should().Contain("{Binding CloseBehaviorSettings.IsMinimizeSelected");
         MainXaml.Should().Contain("{Binding CloseBehaviorSettings.IsExitSelected");
+    }
+
+    [Fact]
+    public void 截图模式下的配置路径不能露出临时文件()
+    {
+        // 渲染进程写的是 %TEMP%\go-render-close-behavior.json，而设置页截图要进公开仓库：
+        // 图上必须显示真实默认位置，不能把渲染痕迹拍进去（与 BackgroundConfigPath 同一处理）。
+        SettingsViewModelCode.Should().Contain("MainViewModel.ScreenshotMode");
+        SettingsViewModelCode.Should().Contain(@"%LocalAppData%\GameOptimizer\close-behavior.json");
     }
 
     private static string RepoRoot()

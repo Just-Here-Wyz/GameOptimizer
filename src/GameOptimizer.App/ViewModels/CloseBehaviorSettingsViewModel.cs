@@ -67,8 +67,16 @@ public sealed class CloseBehaviorSettingsViewModel : INotifyPropertyChanged
     /// <summary>当前行为的后果说明。</summary>
     public string CurrentExplain => CloseBehaviorPolicy.Explain(_service.SavedBehavior);
 
-    /// <summary>配置文件位置：用户要备份或手工改的时候知道去哪找。</summary>
-    public string ConfigPathText => $"配置文件：{PathRedactor.Redact(_service.FilePath)}";
+    /// <summary>
+    /// 配置文件位置：用户要备份或手工改的时候知道去哪找。
+    ///
+    /// 截图模式下换成真实默认位置——渲染进程读写的是一份临时文件，
+    /// 而这些图要进公开仓库，不能把 `Temp\go-render-close-behavior.json` 这种渲染痕迹带上
+    /// （与 <c>MainViewModel.BackgroundConfigPath</c> 同一处理）。
+    /// </summary>
+    public string ConfigPathText => "配置文件：" + (MainViewModel.ScreenshotMode
+        ? @"%LocalAppData%\GameOptimizer\close-behavior.json"
+        : PathRedactor.Redact(_service.FilePath));
 
     /// <summary>保存结果 / 读盘提示。写盘失败必须在这里说清楚。</summary>
     public string StatusText
