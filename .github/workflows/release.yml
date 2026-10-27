@@ -82,6 +82,11 @@ jobs:
 
       # 仓库里的 SHA256SUMS.txt 累积了历史版本；Release 附件只放本版两个文件，
       # 否则下载的人会看到一堆与自己无关的校验值。
+      #
+      # 注意：文件名必须就叫 SHA256SUMS.txt。gh release upload 不支持「上传时改名」
+      # （写成 路径#别名 不会生效，资产名仍是文件自身的名字），只能靠同名 + --clobber
+      # 去覆盖上一轮留下那一个，否则 Release 上会攒出 SHA256SUMS.txt 与
+      # SHA256SUMS-release.txt 两个内容一样、名字不一样的文件。
       - name: 生成本版校验文件
         shell: pwsh
         run: |
@@ -98,7 +103,9 @@ jobs:
           if ($lines.Count -ne $want.Count) {
             throw "SHA256SUMS.txt 里缺少本版产物，期望 $($want.Count) 行，实际 $($lines.Count) 行"
           }
-          $lines | Set-Content 'publish/win-x64/SHA256SUMS-release.txt' -Encoding utf8
+          $out = 'publish/release'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $lines | Set-Content (Join-Path $out 'SHA256SUMS.txt') -Encoding utf8
           $lines | ForEach-Object { Write-Host $_ }
 
       # 已存在就不重建（避免把手工写好的发布说明冲掉），只把附件补/覆盖上去
@@ -120,7 +127,7 @@ jobs:
           gh release upload $env:TAG `
             "publish/win-x64/GameOptimizer-v$version-win-x64.exe" `
             "publish/win-x64/GameOptimizer-Setup-v$version.exe" `
-            "publish/win-x64/SHA256SUMS-release.txt#SHA256SUMS.txt" `
+            "publish/release/SHA256SUMS.txt" `
             --clobber
           if ($LASTEXITCODE -ne 0) { throw '上传附件失败' }
 
@@ -133,6 +140,6 @@ jobs:
           path: |
             publish/win-x64/GameOptimizer-v*.exe
             publish/win-x64/GameOptimizer-Setup-v*.exe
-            publish/win-x64/SHA256SUMS*.txt
+            publish/release/SHA256SUMS.txt
           if-no-files-found: warn
           retention-days: 7
