@@ -1,24 +1,24 @@
 # 游戏优化助手
 
 [![CI](https://github.com/Just-Here-Wyz/GameOptimizer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Just-Here-Wyz/GameOptimizer/actions/workflows/ci.yml)
-[![version](https://img.shields.io/github/v/tag/Just-Here-Wyz/GameOptimizer?label=version&color=4C8DFF)](https://github.com/Just-Here-Wyz/GameOptimizer/releases)
+[![release](https://img.shields.io/github/v/release/Just-Here-Wyz/GameOptimizer?label=release&color=4C8DFF)](https://github.com/Just-Here-Wyz/GameOptimizer/releases)
 [![license](https://img.shields.io/github/license/Just-Here-Wyz/GameOptimizer?color=4C8DFF)](LICENSE)
 
 > **v2.5.2** ｜ Windows 10 / 11 x64 ｜ C# · .NET 8 · WPF ｜ 单文件免安装
 
-[完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md)
+[完整文档](docs/README.md) ｜ [已知限制](docs/04-已知限制.md) ｜ [第三方署名](THIRD-PARTY-NOTICES.md) ｜ [参与开发](CONTRIBUTING.md)
 
 ## 下载
 
-**[⬇ 下载 v2.5.0（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.5.0)**
+**[⬇ 下载 v2.5.2（单文件 exe）](https://github.com/Just-Here-Wyz/GameOptimizer/releases/tag/v2.5.2)**
 
 Windows 10 / 11 x64 · 约 69 MB · **自包含，无需安装 .NET 运行时** · 双击即用
 （程序声明 `requireAdministrator`，启动会弹 UAC）
 
 | 附件 | 说明 |
 |---|---|
-| `GameOptimizer-v2.5.0-win-x64.exe` | 单文件自包含，双击运行，免安装 |
-| `GameOptimizer-Setup-v2.5.0.exe` | Inno Setup 安装程序，装到 `Program Files` 并建开始菜单 / 桌面快捷方式与卸载项 |
+| `GameOptimizer-v2.5.2-win-x64.exe` | 单文件自包含，双击运行，免安装（69.3 MB） |
+| `GameOptimizer-Setup-v2.5.2.exe` | Inno Setup 安装程序，装到 `Program Files` 并建开始菜单 / 桌面快捷方式与卸载项（64.3 MB） |
 | `SHA256SUMS.txt` | 校验值，下载后可用 `certutil -hashfile <exe> SHA256` 对比 |
 
 > 发布产物未做代码签名，首次运行可能触发 SmartScreen「更多信息 → 仍要运行」。
@@ -122,7 +122,7 @@ dotnet run --project src/GameOptimizer.App
 > v2.0.0 起程序声明 `requireAdministrator`，启动会弹 UAC。
 > 内存清理、电源计划、结束高权限进程都需要管理员权限。
 
-> **版本状态**：源码 **v2.5.2**，最近发布 v2.5.0（2026-10-26）。
+> **版本状态**：源码 **v2.5.2**，最近发布 v2.5.2（2026-10-27）。
 > 版本号按 [版本规则](docs/03-版本规则.md) 自动推进；下载链接与这一行只在真的打包上传、建成 Release 之后才换。
 
 ## 界面
@@ -155,7 +155,7 @@ dotnet run --project src/GameOptimizer.App
 | 项 | 数据 |
 |---|---|
 | 开发周期 | 2026-10-19 ~ 10-22，**4 天完成主体功能**（36 次提交） |
-| 提交与版本 | `v0.5.0` → **v2.5.2**，**18 个版本 tag**（源码已到 v2.5.2；可下载的最近发布仍是 v2.5.0） |
+| 提交与版本 | `v0.5.0` → **v2.5.2**，**18 个版本 tag**；每个 `v*` tag 由 CI 打包并附到 Release |
 | 代码量 | C# **31,411 行 / 167 个文件**（src + tests，不含生成代码）+ XAML 2,585 行 / 6 个文件 |
 | 测试 | **926 个 xUnit 用例**，只引用 `GameOptimizer.Core`，不引入 UI 依赖；少量用例会读真实系统（进程列表 / 电源计划 / 性能计数器）做一致性校验 |
 | 持续集成 | GitHub Actions（`windows-latest`）：推送 `main` 与打 `v*` tag 时还原 → Release 构建 → 跑全量用例，失败会把用例名写进 Actions 摘要 |
